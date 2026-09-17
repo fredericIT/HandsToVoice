@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# IDE
+.idea/
+.vscode/
+
+# Large data files (data/labels.json stays tracked — it's small config,
+# not bulk data; recorded videos/audio/sequences are regenerable/re-recordable)
+data/videos/
+data/audio/
+data/sequences/
+data/raw/
+data/processed/
+data/test_record.wav
+dataset/
+datasets/
+
+# Generated files
+outputs/
+runs/
+logs/
+
+# Python model files
+*.h5
+*.keras
+*.pth
+*.pt
+*.onnx
+
+# Videos
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Temporary files
+*.tmp
+*.temp

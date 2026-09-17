@@ -1,0 +1,34 @@
+{
+    "signs": {
+        "muraho": {
+            "id": 0,
+            "kinyarwanda": "muraho",
+            "english": "hello",
+            "category": "common"
+        },
+        "neza": {
+            "id": 1,
+            "kinyarwanda": "neza",
+            "english": "good",
+            "category": "common"
+        },
+        "umunsi": {
+            "id": 2,
+            "kinyarwanda": "umunsi",
+            "english": "day",
+            "category": "common"
+        },
+        "ameze": {
+            "id": 3,
+            "kinyarwanda": "ameze",
+            "english": "she /he is",
+            "category": "common"
+        }
+    },
+    "metadata": {
+        "version": "1.0",
+        "language": "Kinyarwanda",
+        "total_signs": 4,
+        "description": "Demo vocabulary for HandsToVoice KSL recognition system"
+    }
+}
