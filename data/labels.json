@@ -23,12 +23,18 @@
             "kinyarwanda": "ameze",
             "english": "she /he is",
             "category": "common"
+        },
+        "amazina_yange": {
+            "id": 4,
+            "kinyarwanda": "amazina yange",
+            "english": "my name is",
+            "category": "greetings"
         }
     },
     "metadata": {
         "version": "1.0",
         "language": "Kinyarwanda",
-        "total_signs": 4,
+        "total_signs": 5,
         "description": "Demo vocabulary for HandsToVoice KSL recognition system"
     }
 }

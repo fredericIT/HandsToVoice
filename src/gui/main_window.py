@@ -34,7 +34,12 @@ class MainWindow(QMainWindow):
     """Main application window for HandsToVoice system."""
 
     # How long (ms) the system stays in INTERPRETING before going back to READY
-    INTERP_DURATION_MS = 4000   # ms to lock out new signs after one fires
+    INTERP_DURATION_MS = 1200   # ms to lock out new signs after one fires
+
+    # Grace period (ms) between a sign being detected and it actually being
+    # spoken aloud — gives the user a window to hit "Undo Last Sign" and
+    # cancel a wrong detection before it reaches the audience.
+    CONFIRM_DELAY_MS = 1500
 
     def __init__(self, camera, detector, classifier, tts, vocabulary,
                  lstm_classifier=None):
@@ -66,9 +71,16 @@ class MainWindow(QMainWindow):
         self._lstm_sign_buffer = []       # consecutive overlapping-window consensus for LSTM
         self._LSTM_CONSENSUS_NEEDED = 2   # windows in a row to confirm an LSTM sign
 
-        # Batch-speak: accumulate 3 signs then read them all together
-        self._BATCH_SIZE = 3
+        # Batch-speak: speak each sign as soon as it's recognized
+        self._BATCH_SIZE = 1
         self._pending_batch = []      # labels waiting to be spoken
+
+        # Confirm-before-speak: holds a detected sign during CONFIRM_DELAY_MS
+        # so "Undo Last Sign" can cancel it before it's voiced
+        self._pending_speak_labels = None
+        self._confirm_timer = QTimer(self)
+        self._confirm_timer.setSingleShot(True)
+        self._confirm_timer.timeout.connect(self._confirm_pending_sign)
 
         # Setup UI
         self.setWindowTitle("HandsToVoice - Kinyarwanda Sign Language Recognition")
@@ -194,7 +206,7 @@ class MainWindow(QMainWindow):
         self.batch_progress_bar = QProgressBar()
         self.batch_progress_bar.setRange(0, self._BATCH_SIZE)
         self.batch_progress_bar.setValue(0)
-        self.batch_progress_bar.setFormat("0 / 3 signs")
+        self.batch_progress_bar.setFormat(f"0 / {self._BATCH_SIZE} signs")
         self.batch_progress_bar.setStyleSheet(
             "QProgressBar { border-radius:6px; background:#1A2332; text-align:center;"
             " color:#FFFFFF; font-weight:600; font-size:11px; }"
@@ -411,6 +423,16 @@ class MainWindow(QMainWindow):
         self.clear_button.clicked.connect(self.clear_sentence)
         layout.addWidget(self.clear_button)
 
+        self.undo_sign_button = QPushButton("↩️ Undo Last Sign")
+        self.undo_sign_button.setObjectName("clearButton")
+        self.undo_sign_button.setToolTip(
+            "Remove the last detected sign — use this if the system read the wrong sign,"
+            " before it gets spoken to your audience."
+        )
+        self.undo_sign_button.clicked.connect(self.undo_last_sign)
+        self.undo_sign_button.setEnabled(False)
+        layout.addWidget(self.undo_sign_button)
+
         layout.addStretch()
 
         self.add_sign_button = QPushButton("➕ Add Sign")
@@ -626,10 +648,17 @@ class MainWindow(QMainWindow):
             )
 
             if batch_count >= self._BATCH_SIZE:
-                # Speak all 3 accumulated signs together as a sentence
+                # Hold the accumulated signs for a short grace period instead
+                # of speaking immediately, so a wrong detection can be
+                # cancelled via "Undo Last Sign" before it reaches the
+                # audience.
                 batch_labels = list(self._pending_batch)
-                logger.info(f"[Batch] Speaking batch: {batch_labels}")
-                self.tts.speak(None, labels=batch_labels)
+                logger.info(
+                    f"[Batch] Holding for confirm ({self.CONFIRM_DELAY_MS}ms): {batch_labels}"
+                )
+                self._pending_speak_labels = batch_labels
+                self.undo_sign_button.setEnabled(True)
+                self._confirm_timer.start(self.CONFIRM_DELAY_MS)
 
                 # ── Full reset so next batch collects only NEW signs ──
                 self._pending_batch.clear()
@@ -649,6 +678,37 @@ class MainWindow(QMainWindow):
 
             self._enter_interpreting()
             return
+
+    # ── Confirm-before-speak / Undo ──────────────────────────────────────────
+    def _confirm_pending_sign(self):
+        """Grace period elapsed with no Undo — speak the held sign(s) now."""
+        labels = self._pending_speak_labels
+        self._pending_speak_labels = None
+        self.undo_sign_button.setEnabled(False)
+        if labels:
+            logger.info(f"[Batch] Speaking (confirmed): {labels}")
+            self.tts.speak(None, labels=labels)
+
+    def undo_last_sign(self):
+        """Remove the most recently detected sign.
+
+        If it's still within its confirm grace period, this cancels the
+        speech outright — nothing is ever spoken to the audience. If it
+        already spoke, this just removes it from the sentence text.
+        """
+        if self._confirm_timer.isActive() and self._pending_speak_labels:
+            self._confirm_timer.stop()
+            cancelled = self._pending_speak_labels
+            self._pending_speak_labels = None
+            logger.info(f"[Undo] Cancelled before speaking: {cancelled}")
+
+        if self.sentence_labels:
+            self.sentence_labels.pop()
+            self.sentence_history.pop()
+            self.update_sentence_display()
+
+        self.undo_sign_button.setEnabled(False)
+        self._last_detected_sign = None   # allow re-signing the same sign immediately
 
     # ── Sentence management ──────────────────────────────────────────────────
     def add_sign_to_sentence(self, sign_label):
@@ -839,12 +899,15 @@ class MainWindow(QMainWindow):
         self._sign_buffer.clear()
         self._frame_skip = 0
         self._pending_batch.clear()
+        self._confirm_timer.stop()
+        self._pending_speak_labels = None
+        self.undo_sign_button.setEnabled(False)
         if self.use_lstm and self.lstm_classifier:
             self.lstm_classifier.clear_buffer()
             self.lstm_fill_bar.setValue(0)
         self.sidebar_last_sign.setText("—")
         self.batch_progress_bar.setValue(0)
-        self.batch_progress_bar.setFormat("0 / 3 signs")
+        self.batch_progress_bar.setFormat(f"0 / {self._BATCH_SIZE} signs")
         logger.info("[MainWindow] Detection state reset — ready for new signs.")
 
     # ── Recognition toggle ───────────────────────────────────────────────────
@@ -882,9 +945,12 @@ class MainWindow(QMainWindow):
         self.current_confidence = 0.0
         self._last_detected_sign = None   # allow re-detecting same sign
         self._pending_batch.clear()       # discard any partial batch
+        self._confirm_timer.stop()        # cancel any sign awaiting speech
+        self._pending_speak_labels = None
+        self.undo_sign_button.setEnabled(False)
         self.sidebar_last_sign.setText("—")
         self.batch_progress_bar.setValue(0)
-        self.batch_progress_bar.setFormat("0 / 3 signs")
+        self.batch_progress_bar.setFormat(f"0 / {self._BATCH_SIZE} signs")
         self.update_sentence_display()
         self.update_ui_state()
 

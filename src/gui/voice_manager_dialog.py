@@ -6,6 +6,8 @@ for each sign, replacing default TTS with their own voice.
 
 import os
 import time
+import wave
+import audioop
 import subprocess
 import threading
 from PyQt5.QtWidgets import (
@@ -19,6 +21,62 @@ from PyQt5.QtGui import QFont
 from src.logger import get_logger
 
 logger = get_logger("gui.voice_manager_dialog")
+
+
+def _trim_silence(path, pad_ms=120, chunk_ms=20, silence_floor=150, voiced_ratio=0.12):
+    """
+    Trim leading/trailing silence from a mono PCM WAV file in place, so the
+    saved recording is only as long as the word actually spoken — not the
+    full fixed recording window.
+
+    Returns True if voiced audio was found (file trimmed in place), or
+    False if the recording was silence throughout (nothing to save).
+    """
+    with wave.open(path, 'rb') as wf:
+        n_channels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        framerate = wf.getframerate()
+        raw = wf.readframes(wf.getnframes())
+
+    frame_size = sampwidth * n_channels
+    chunk_frames = max(1, int(framerate * chunk_ms / 1000))
+    chunk_bytes = chunk_frames * frame_size
+    if chunk_bytes <= 0 or len(raw) < chunk_bytes:
+        return False
+
+    chunk_rms = [
+        audioop.rms(raw[i:i + chunk_bytes], sampwidth)
+        for i in range(0, len(raw) - chunk_bytes + 1, chunk_bytes)
+    ]
+    if not chunk_rms:
+        return False
+
+    peak = max(chunk_rms)
+    if peak < silence_floor:
+        return False   # essentially silent throughout — mic likely muted/wrong device
+
+    threshold = max(silence_floor, peak * voiced_ratio)
+    voiced = [r >= threshold for r in chunk_rms]
+    if not any(voiced):
+        return False
+
+    first = voiced.index(True)
+    last = len(voiced) - 1 - voiced[::-1].index(True)
+
+    pad_chunks = max(1, int(pad_ms / chunk_ms))
+    start_chunk = max(0, first - pad_chunks)
+    end_chunk = min(len(voiced) - 1, last + pad_chunks)
+
+    start_byte = start_chunk * chunk_bytes
+    end_byte = min(len(raw), (end_chunk + 1) * chunk_bytes)
+
+    with wave.open(path, 'wb') as wf_out:
+        wf_out.setnchannels(n_channels)
+        wf_out.setsampwidth(sampwidth)
+        wf_out.setframerate(framerate)
+        wf_out.writeframes(raw[start_byte:end_byte])
+
+    return True
 
 
 class VoiceManagerDialog(QDialog):
@@ -292,7 +350,10 @@ class VoiceManagerDialog(QDialog):
     def _populate_audio_devices(self):
         """List recording devices via arecord -l and populate the combo box."""
         self.device_combo.clear()
-        devices = ["pulse (default)"]   # always add PulseAudio default first
+        # "default" resolves through the system's configured ALSA plugin
+        # (pipewire-alsa here) — unlike "pulse", which needs the separate
+        # alsa-plugins pulse PCM that isn't installed on every system.
+        devices = ["default (system)"]
         try:
             out = subprocess.check_output(
                 ["arecord", "-l"], stderr=subprocess.DEVNULL, text=True
@@ -305,12 +366,12 @@ class VoiceManagerDialog(QDialog):
                         card_info = parts[0].strip()   # "card 0"
                         card_num = card_info.split()[-1]
                         dev_part = parts[1].split(",")[0].strip()  # " PCH [HDA Intel PCH]"
-                        devices.append(f"hw:{card_num},0  ({dev_part.strip()})")
+                        devices.append(f"plughw:{card_num},0  ({dev_part.strip()})")
         except Exception:
             pass
 
         self.device_combo.addItems(devices)
-        self.device_combo.setCurrentIndex(0)  # always default to pulse
+        self.device_combo.setCurrentIndex(0)  # always default to "default"
 
     def _on_device_changed(self, idx):
         pass  # device is resolved in start_recording from combo text
@@ -388,9 +449,9 @@ class VoiceManagerDialog(QDialog):
     def _arecord_device(self):
         """Return the ALSA device string for arecord from the combo selection."""
         text = self.device_combo.currentText()
-        if text.startswith("hw:"):
-            return text.split()[0]   # e.g. "hw:0,0"
-        return "pulse"               # default: PulseAudio
+        if text.startswith("plughw:"):
+            return text.split()[0]   # e.g. "plughw:0,0"
+        return "default"             # routes through the system's ALSA plugin
 
     def start_recording(self):
         if not self.selected_label:
@@ -506,18 +567,34 @@ class VoiceManagerDialog(QDialog):
                   os.path.exists(temp) and
                   os.path.getsize(temp) > 4096)   # at least a few KB
 
+            no_voice = False
+            if ok:
+                # Trim to just the spoken part — cuts the dead air from the
+                # fixed recording window down to the actual word, and catches
+                # a recording that's silence throughout (wrong mic/muted)
+                # before it ever gets saved as a "successful" take.
+                try:
+                    if not _trim_silence(temp):
+                        ok = False
+                        no_voice = True
+                except Exception as e:
+                    logger.error(f"[VoiceManager] Trim error: {e}")
+
             if ok:
                 # Safe swap: only remove old file after new one is confirmed
                 try:
                     if os.path.exists(dest):
                         os.unlink(dest)
                     os.rename(temp, dest)
-                    logger.info(f"[VoiceManager] ✔ Saved: {dest}")
+                    logger.info(f"[VoiceManager] ✔ Saved (trimmed): {dest}")
                 except Exception as e:
                     logger.error(f"[VoiceManager] ✘ Rename failed: {e}")
                     ok = False
             else:
-                logger.info("[VoiceManager] ✘ Recording empty/missing — old file kept")
+                if no_voice:
+                    logger.info("[VoiceManager] ✘ No voice detected in recording — old file kept")
+                else:
+                    logger.info("[VoiceManager] ✘ Recording empty/missing — old file kept")
                 if temp and os.path.exists(temp):
                     try:
                         os.unlink(temp)
@@ -525,11 +602,11 @@ class VoiceManagerDialog(QDialog):
                         pass
 
             # Update UI back on the main thread via a queued timer
-            QTimer.singleShot(0, lambda: self._on_recording_saved(label, ok, missing_only))
+            QTimer.singleShot(0, lambda: self._on_recording_saved(label, ok, missing_only, no_voice))
 
         threading.Thread(target=_finish, daemon=True).start()
 
-    def _on_recording_saved(self, label, success, missing_only):
+    def _on_recording_saved(self, label, success, missing_only, no_voice=False):
         """Called on the main thread once the background save thread finishes."""
         self.progress_bar.setValue(100)
         self.progress_bar.setStyleSheet(
@@ -537,8 +614,11 @@ class VoiceManagerDialog(QDialog):
             "QProgressBar::chunk { background-color: #FF6B6B; border-radius: 4px; }"
         )
         if success:
-            self.lbl_status.setText("✅ Recording saved!")
+            self.lbl_status.setText("✅ Recording saved! (trimmed to spoken audio)")
             self.lbl_status.setStyleSheet("color:#00D4AA; font-weight:bold;")
+        elif no_voice:
+            self.lbl_status.setText("⚠️ No voice detected — check mic and speak clearly, then retry")
+            self.lbl_status.setStyleSheet("color:#FF6B6B; font-weight:bold;")
         else:
             self.lbl_status.setText("❌ Recording failed — please try again")
             self.lbl_status.setStyleSheet("color:#FF6B6B; font-weight:bold;")

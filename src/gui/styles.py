@@ -3,6 +3,29 @@ HandsToVoice — GUI Styles Module
 Dark-mode QSS stylesheet for the PyQt5 interface.
 """
 
+import os
+from PyQt5.QtGui import QFontDatabase
+
+_FONTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "assets", "fonts")
+
+_FONTS_LOADED = False
+
+
+def load_bundled_fonts():
+    """Register the app's bundled fonts (Inter body text, Rubik display
+    headings) with Qt. Safe to call more than once — only registers once.
+    Must be called after a QApplication exists.
+    """
+    global _FONTS_LOADED
+    if _FONTS_LOADED:
+        return
+    for filename in ("Inter-Regular.otf", "Inter-SemiBold.otf", "Rubik-Bold.ttf"):
+        path = os.path.join(_FONTS_DIR, filename)
+        if os.path.exists(path):
+            QFontDatabase.addApplicationFont(path)
+    _FONTS_LOADED = True
+
 # ─── Color Palette ────────────────────────────────────────────────────────────
 # Primary Background:  #0F1419  (deep charcoal)
 # Secondary BG:        #1A2332  (dark blue-grey)

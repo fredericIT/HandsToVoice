@@ -9,12 +9,12 @@ import os
 import signal
 import argparse
 from PyQt5.QtWidgets import QApplication, QMessageBox
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, QThread, pyqtSignal
 
 # Add src directory to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from src.gui.styles import get_stylesheet
+from src.gui.styles import get_stylesheet, load_bundled_fonts
 from src.capture import CameraCapture
 from src.detector import HandDetector
 from src.classifier import SignClassifier, LSTMClassifier
@@ -22,10 +22,51 @@ from src.tts import VoiceOutput
 from src.vocabulary import Vocabulary
 from src.gui.main_window import MainWindow
 from src.gui.welcome_screen import WelcomeScreen
+from src.gui.loading_screen import LoadingScreen
 
 from src.logger import get_logger
 
 logger = get_logger("main")
+
+
+class _ComponentInitWorker(QThread):
+    """Loads the camera, detector, classifiers, and voice engine off the
+    GUI thread, so clicking "Get Started" shows a loading screen instantly
+    instead of freezing the window for the several seconds this takes."""
+
+    ready = pyqtSignal(dict)
+    failed = pyqtSignal(str)
+
+    def __init__(self, camera_index):
+        super().__init__()
+        self.camera_index = camera_index
+
+    def run(self):
+        try:
+            camera = CameraCapture(camera_index=self.camera_index)
+            detector = HandDetector()
+            classifier = SignClassifier()
+
+            lstm_classifier = LSTMClassifier()
+            if lstm_classifier.is_ready():
+                logger.info("[System] LSTM model detected — sequence mode available")
+            else:
+                logger.info("[System] No LSTM model — using static classifier only")
+
+            vocabulary = Vocabulary()
+            tts = VoiceOutput(vocabulary=vocabulary)
+
+            self.ready.emit({
+                "camera": camera,
+                "detector": detector,
+                "classifier": classifier,
+                "lstm_classifier": lstm_classifier,
+                "vocabulary": vocabulary,
+                "tts": tts,
+            })
+        except Exception as e:
+            logger.error(f"[System] Error initializing components: {e}")
+            self.failed.emit(str(e))
 
 
 class HandsToVoiceApp:
@@ -36,6 +77,8 @@ class HandsToVoiceApp:
         self.app = None
         self.main_window = None
         self.welcome_screen = None
+        self.loading_screen = None
+        self._init_worker = None
         self._signal_timer = None
 
         # Initialize core components
@@ -45,38 +88,6 @@ class HandsToVoiceApp:
         self.lstm_classifier = None
         self.tts = None
         self.vocabulary = None
-
-    def initialize_components(self):
-        """Initialize all system components."""
-        try:
-            # Initialize camera
-            self.camera = CameraCapture(camera_index=self.camera_index)
-            
-            # Initialize hand detector
-            self.detector = HandDetector()
-            
-            # Initialize sign classifier (static)
-            self.classifier = SignClassifier()
-            
-            # Initialize LSTM classifier (video/sequence-based)
-            self.lstm_classifier = LSTMClassifier()
-            if self.lstm_classifier.is_ready():
-                logger.info("[System] LSTM model detected — sequence mode available")
-            else:
-                logger.info("[System] No LSTM model — using static classifier only")
-            
-            # Initialize vocabulary
-            self.vocabulary = Vocabulary()
-
-            # Initialize text-to-speech (custom recordings only — AI TTS disabled)
-            self.tts = VoiceOutput(vocabulary=self.vocabulary)
-            
-            logger.info("[System] All components initialized successfully")
-            return True
-            
-        except Exception as e:
-            logger.error(f"[System] Error initializing components: {e}")
-            return False
 
     def create_gui(self):
         """Create and configure the main GUI window."""
@@ -116,6 +127,7 @@ class HandsToVoiceApp:
         self.app = QApplication(sys.argv)
         self.app.setApplicationName("HandsToVoice")
         self.app.setApplicationVersion("1.0")
+        load_bundled_fonts()
         self.app.setStyleSheet(get_stylesheet())
 
         self.welcome_screen = WelcomeScreen()
@@ -126,12 +138,31 @@ class HandsToVoiceApp:
         return self.app.exec_()
 
     def _start_main_app(self):
-        """Initialize components and show the main window — called only
-        after the welcome screen's "Get Started" button is clicked."""
-        if not self.initialize_components():
-            self._show_error("Failed to initialize system components")
-            self.app.quit()
-            return
+        """Called the instant "Get Started" is clicked.
+
+        Shows a lightweight animated loading screen immediately and loads
+        the camera/detector/models on a background thread — so the click
+        feels instant instead of freezing the window for the several
+        seconds real initialization takes.
+        """
+        self.loading_screen = LoadingScreen()
+        self.loading_screen.show()
+
+        self._init_worker = _ComponentInitWorker(self.camera_index)
+        self._init_worker.ready.connect(self._on_components_ready)
+        self._init_worker.failed.connect(self._on_components_failed)
+        self._init_worker.start()
+
+    def _on_components_ready(self, components):
+        """Called on the GUI thread once the background worker has built
+        every component — safe to build QWidgets here."""
+        self.camera = components["camera"]
+        self.detector = components["detector"]
+        self.classifier = components["classifier"]
+        self.lstm_classifier = components["lstm_classifier"]
+        self.vocabulary = components["vocabulary"]
+        self.tts = components["tts"]
+        logger.info("[System] All components initialized successfully")
 
         if not self.create_gui():
             self._show_error("Failed to create GUI")
@@ -139,6 +170,9 @@ class HandsToVoiceApp:
             return
 
         self.main_window.show()
+        if self.loading_screen:
+            self.loading_screen.close()
+            self.loading_screen = None
 
         # Setup timer for signal handling — kept as an attribute so it isn't
         # garbage-collected once this method returns.
@@ -147,6 +181,14 @@ class HandsToVoiceApp:
         self._signal_timer.start(100)
 
         logger.info("[System] HandsToVoice started successfully")
+
+    def _on_components_failed(self, message):
+        """Called on the GUI thread if the background worker raised."""
+        if self.loading_screen:
+            self.loading_screen.close()
+            self.loading_screen = None
+        self._show_error(f"Failed to initialize system components: {message}")
+        self.app.quit()
 
     def _signal_handler(self, signum, frame):
         """Handle Ctrl+C signal for graceful shutdown."""
