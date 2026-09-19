@@ -72,7 +72,7 @@ class MainWindow(QMainWindow):
         self._LSTM_CONSENSUS_NEEDED = 2   # windows in a row to confirm an LSTM sign
 
         # Batch-speak: speak each sign as soon as it's recognized
-        self._BATCH_SIZE = 1
+        self._BATCH_SIZE = 3
         self._pending_batch = []      # labels waiting to be spoken
 
         # Confirm-before-speak: holds a detected sign during CONFIRM_DELAY_MS
@@ -657,6 +657,7 @@ class MainWindow(QMainWindow):
             self.sign_label.setText(display)
 
             self.add_sign_to_sentence(sign_label)
+            self.undo_sign_button.setEnabled(True)
 
             # ── Batch-speak: accumulate 3 signs, then read all together ──
             self._pending_batch.append(sign_label)
@@ -694,7 +695,7 @@ class MainWindow(QMainWindow):
                 # Reset bar after a short delay so user sees the flash
                 QTimer.singleShot(800, lambda: (
                     self.batch_progress_bar.setValue(0),
-                    self.batch_progress_bar.setFormat("0 / 3 signs")
+                    self.batch_progress_bar.setFormat(f"0 / {self._BATCH_SIZE} signs")
                 ))
             else:
                 logger.info(f"[Batch] Collected {batch_count}/{self._BATCH_SIZE} — waiting for more")
@@ -713,24 +714,36 @@ class MainWindow(QMainWindow):
             self.tts.speak(None, labels=labels)
 
     def undo_last_sign(self):
-        """Remove the most recently detected sign.
+        """Remove the most recently detected sign — from wherever it
+        currently lives, so a mistake anywhere in the batch of 3 can be
+        corrected, not just the one that just finished the batch:
 
-        If it's still within its confirm grace period, this cancels the
-        speech outright — nothing is ever spoken to the audience. If it
-        already spoke, this just removes it from the sentence text.
+        - Still being collected (batch not yet at 3): drop it from the
+          pending batch, nothing has been held for speech yet.
+        - Held during its confirm grace period (batch just completed):
+          drop just that one sign from what's about to be spoken — the
+          rest of the batch still speaks normally when the timer fires.
+        - Already spoken: nothing to un-speak, so this just corrects the
+          sentence text.
         """
-        if self._confirm_timer.isActive() and self._pending_speak_labels:
-            self._confirm_timer.stop()
-            cancelled = self._pending_speak_labels
-            self._pending_speak_labels = None
-            logger.info(f"[Undo] Cancelled before speaking: {cancelled}")
+        if self._pending_batch:
+            removed = self._pending_batch.pop()
+            logger.info(f"[Undo] Removed from pending batch: {removed}")
+            batch_count = len(self._pending_batch)
+            self.batch_progress_bar.setValue(batch_count)
+            self.batch_progress_bar.setFormat(f"{batch_count} / {self._BATCH_SIZE} signs")
+        elif self._pending_speak_labels:
+            removed = self._pending_speak_labels.pop()
+            logger.info(f"[Undo] Removed before speaking: {removed}")
+            if not self._pending_speak_labels:
+                self._confirm_timer.stop()
 
         if self.sentence_labels:
             self.sentence_labels.pop()
             self.sentence_history.pop()
             self.update_sentence_display()
 
-        self.undo_sign_button.setEnabled(False)
+        self.undo_sign_button.setEnabled(bool(self.sentence_labels))
         self._last_detected_sign = None   # allow re-signing the same sign immediately
 
     # ── Sentence management ──────────────────────────────────────────────────
