@@ -764,6 +764,11 @@ class VoiceManagerDialog(QDialog):
                 logger.error(f"[VoiceManager] Delete error: {e}")
                 QMessageBox.critical(self, "Delete Error", f"Could not delete audio file: {e}")
 
+    def done(self, result):
+        # The Close button calls accept(), which never fires closeEvent.
+        self.stop_recording()
+        super().done(result)
+
     def closeEvent(self, event):
         self.stop_recording()
         event.accept()

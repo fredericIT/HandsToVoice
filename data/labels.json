@@ -24,17 +24,131 @@
             "english": "she /he is",
             "category": "common"
         },
+        "mwiza": {
+            "id": 5,
+            "kinyarwanda": "mwiza",
+            "english": "good",
+            "category": "common"
+        },
+        "kuwambere": {
+            "id": 6,
+            "kinyarwanda": "kuwa mbere",
+            "english": "Monday",
+            "category": "common"
+        },
+        "ngewe": {
+            "id": 7,
+            "kinyarwanda": "ngewe",
+            "english": "my",
+            "category": "common"
+        },
+        "mama": {
+            "id": 8,
+            "kinyarwanda": "mama",
+            "english": "mather",
+            "category": "common"
+        },
+        "papa": {
+            "id": 9,
+            "kinyarwanda": "papa",
+            "english": "father",
+            "category": "common"
+        },
+        "masenge": {
+            "id": 10,
+            "kinyarwanda": "masenge",
+            "english": "aunt",
+            "category": "common"
+        },
+        "marume": {
+            "id": 11,
+            "kinyarwanda": "marume",
+            "english": "uncle",
+            "category": "common"
+        },
+        "abana": {
+            "id": 12,
+            "kinyarwanda": "abana",
+            "english": "children",
+            "category": "common"
+        },
+        "benshi": {
+            "id": 13,
+            "kinyarwanda": "benshi",
+            "english": "benshi",
+            "category": "common"
+        },
+        "kuwa_kabiri": {
+            "id": 14,
+            "kinyarwanda": "kuwa kabiri",
+            "english": "tuesday",
+            "category": "common"
+        },
+        "kuwa_gatatu": {
+            "id": 15,
+            "kinyarwanda": "kuwa gatatu",
+            "english": "wednesday",
+            "category": "common"
+        },
+        "kuwa_kane": {
+            "id": 16,
+            "kinyarwanda": "kuwa kane",
+            "english": "thursday",
+            "category": "common"
+        },
+        "kuwa_gatanu": {
+            "id": 17,
+            "kinyarwanda": "kuwa gatanu",
+            "english": "friday",
+            "category": "common"
+        },
+        "kuwa_gatandatu": {
+            "id": 18,
+            "kinyarwanda": "kuwa gatandatu",
+            "english": "saturday",
+            "category": "common"
+        },
+        "kucyumweru": {
+            "id": 19,
+            "kinyarwanda": "kucyumweru",
+            "english": "sunday",
+            "category": "common"
+        },
+        "nyabuneka": {
+            "id": 20,
+            "kinyarwanda": "nyabuneka",
+            "english": "please",
+            "category": "common"
+        },
+        "ni": {
+            "id": 21,
+            "kinyarwanda": "ni",
+            "english": "is",
+            "category": "common"
+        },
         "amazina_yange": {
-            "id": 4,
+            "id": 22,
             "kinyarwanda": "amazina yange",
-            "english": "my name is",
-            "category": "greetings"
+            "english": "my name",
+            "category": "common"
+        },
+        "gusangiza": {
+            "id": 23,
+            "kinyarwanda": "gusangiza",
+            "english": "to share",
+            "category": "common"
+        },
+        "tugiye": {
+            "id": 24,
+            "kinyarwanda": "tugiye",
+            "english": "we are going",
+            "category": "common"
         }
     },
     "metadata": {
         "version": "1.0",
         "language": "Kinyarwanda",
-        "total_signs": 5,
+        "total_signs": 24,
         "description": "Demo vocabulary for HandsToVoice KSL recognition system"
     }
 }

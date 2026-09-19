@@ -132,7 +132,7 @@ class LSTMClassifier:
     """
 
     SEQUENCE_LENGTH = 30
-    FEATURE_LENGTH  = 63
+    FEATURE_LENGTH  = 65   # 63 hand + 2 face-relative (see src/normalize.py)
     SLIDE_STEP      = 10   # frames to drop after a detection (sliding window)
 
     def __init__(self, model_path="models/ksl_lstm_model.h5",
@@ -172,6 +172,7 @@ class LSTMClassifier:
                 with open(meta_path) as f:
                     meta = json.load(f)
                 self.SEQUENCE_LENGTH = meta.get("sequence_length", 30)
+                self.FEATURE_LENGTH = meta.get("feature_length", self.FEATURE_LENGTH)
                 self._buffer = deque(maxlen=self.SEQUENCE_LENGTH)
 
             logger.info(f"[LSTMClassifier] Model loaded. Classes: {len(self.labels)}, "
@@ -180,10 +181,15 @@ class LSTMClassifier:
             logger.error(f"[LSTMClassifier] Error: {e}")
             self.model = None
 
-    def push_frame(self, landmarks):
-        """Add a single frame's landmarks (63,) to the rolling buffer."""
+    def push_frame(self, landmarks, face_ref=None):
+        """Add a single frame's landmarks (63,) to the rolling buffer.
+
+        face_ref: optional (cx, cy, width) of the detected face, used to
+        encode the hand's position relative to the body (see
+        src/normalize.py). None if no face was detected this frame.
+        """
         if landmarks is not None:
-            self._buffer.append(normalize_landmarks(landmarks))
+            self._buffer.append(normalize_landmarks(landmarks, face_ref))
 
     def predict(self):
         """Predict using the full sequence buffer.

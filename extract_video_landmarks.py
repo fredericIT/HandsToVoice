@@ -32,7 +32,7 @@ logger = get_logger("extract_landmarks")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 SEQUENCE_LENGTH  = 30   # frames per sequence fed into LSTM
-FEATURE_LENGTH   = 63   # 21 landmarks × 3 (x, y, z)
+FEATURE_LENGTH   = 65   # 21 landmarks × 3 (x, y, z) + 2 face-relative (dx, dy)
 VIDEO_DIR        = "data/videos"
 SEQUENCE_DIR     = "data/sequences"
 LABELS_CSV       = os.path.join(SEQUENCE_DIR, "labels.csv")
@@ -87,7 +87,8 @@ def extract_landmarks_from_video(video_path: str, detector: HandDetector) -> np.
         frame_idx += 1
 
         if landmarks_list:
-            frames_lm.append(normalize_landmarks(landmarks_list[0]))
+            face_ref = detector.detect_face_ref(frame)
+            frames_lm.append(normalize_landmarks(landmarks_list[0], face_ref))
         else:
             # No hand in this frame — use zeros
             frames_lm.append(np.zeros(FEATURE_LENGTH, dtype=np.float32))

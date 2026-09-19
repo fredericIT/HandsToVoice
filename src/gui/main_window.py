@@ -405,66 +405,89 @@ class MainWindow(QMainWindow):
     def create_control_section(self):
         controls_frame = QFrame()
         controls_frame.setObjectName("cardFrame")
-        layout = QHBoxLayout(controls_frame)
+        outer = QVBoxLayout(controls_frame)
+        outer.setSpacing(12)
+
+        # ── Row 1: live-session controls — used constantly while signing ──
+        session_row = QHBoxLayout()
+        session_row.setSpacing(10)
 
         self.start_stop_button = QPushButton("▶️ Start Recognition")
         self.start_stop_button.setObjectName("speakButton")
         self.start_stop_button.clicked.connect(self.toggle_recognition)
-        layout.addWidget(self.start_stop_button)
+        session_row.addWidget(self.start_stop_button)
 
         self.speak_button = QPushButton("🔊 Speak")
         self.speak_button.setObjectName("speakButton")
         self.speak_button.clicked.connect(self.speak_current_sentence)
         self.speak_button.setEnabled(False)
-        layout.addWidget(self.speak_button)
+        session_row.addWidget(self.speak_button)
 
-        self.clear_button = QPushButton("🗑️ Clear")
-        self.clear_button.setObjectName("clearButton")
-        self.clear_button.clicked.connect(self.clear_sentence)
-        layout.addWidget(self.clear_button)
+        session_row.addStretch()
 
+        # Neutral style: Undo/Clear are reversible, low-stakes actions —
+        # they don't get the red "danger" treatment that Delete Sign does.
         self.undo_sign_button = QPushButton("↩️ Undo Last Sign")
-        self.undo_sign_button.setObjectName("clearButton")
+        self.undo_sign_button.setObjectName("neutralButton")
         self.undo_sign_button.setToolTip(
             "Remove the last detected sign — use this if the system read the wrong sign,"
             " before it gets spoken to your audience."
         )
         self.undo_sign_button.clicked.connect(self.undo_last_sign)
         self.undo_sign_button.setEnabled(False)
-        layout.addWidget(self.undo_sign_button)
+        session_row.addWidget(self.undo_sign_button)
 
-        layout.addStretch()
+        self.clear_button = QPushButton("🗑️ Clear")
+        self.clear_button.setObjectName("neutralButton")
+        self.clear_button.clicked.connect(self.clear_sentence)
+        session_row.addWidget(self.clear_button)
+
+        outer.addLayout(session_row)
+
+        divider = QFrame()
+        divider.setObjectName("separator")
+        outer.addWidget(divider)
+
+        # ── Row 2: vocabulary management — setup-time actions ─────────────
+        manage_row = QHBoxLayout()
+        manage_row.setSpacing(10)
 
         self.add_sign_button = QPushButton("➕ Add Sign")
         self.add_sign_button.setObjectName("addSignButton")
         self.add_sign_button.setToolTip("Define a new sign, record video clips, and retrain the LSTM model")
         self.add_sign_button.clicked.connect(self.open_add_sign_dialog)
-        layout.addWidget(self.add_sign_button)
+        manage_row.addWidget(self.add_sign_button)
 
         self.edit_sign_button = QPushButton("✏️ Edit Sign")
         self.edit_sign_button.setObjectName("addSignButton")
         self.edit_sign_button.setToolTip("Edit an existing sign: change its name, translation, and re-record your voice")
         self.edit_sign_button.clicked.connect(self.open_edit_sign_dialog)
-        layout.addWidget(self.edit_sign_button)
-
-        self.delete_sign_button = QPushButton("🗑️ Delete Sign")
-        self.delete_sign_button.setObjectName("clearButton")
-        self.delete_sign_button.setToolTip("Permanently remove a sign and all its associated data")
-        self.delete_sign_button.clicked.connect(self.open_delete_sign_dialog)
-        layout.addWidget(self.delete_sign_button)
+        manage_row.addWidget(self.edit_sign_button)
 
         self.manage_voices_button = QPushButton("🎙️ Manage Voices")
         self.manage_voices_button.setObjectName("addSignButton")
         self.manage_voices_button.setToolTip("Record, play, and delete custom voices for KSL signs")
         self.manage_voices_button.clicked.connect(self.open_voice_manager)
-        layout.addWidget(self.manage_voices_button)
+        manage_row.addWidget(self.manage_voices_button)
 
         self.learn_sign_button = QPushButton("📖 Learn a Sign")
         self.learn_sign_button.setObjectName("addSignButton")
         self.learn_sign_button.setToolTip(
             "Look up a word and watch a reference video of how to sign it")
         self.learn_sign_button.clicked.connect(self.open_learn_sign_dialog)
-        layout.addWidget(self.learn_sign_button)
+        manage_row.addWidget(self.learn_sign_button)
+
+        manage_row.addStretch()
+
+        # Kept visually separate (red/danger) at the end of its row — this
+        # one really is destructive and permanent, unlike its neighbors.
+        self.delete_sign_button = QPushButton("🗑️ Delete Sign")
+        self.delete_sign_button.setObjectName("clearButton")
+        self.delete_sign_button.setToolTip("Permanently remove a sign and all its associated data")
+        self.delete_sign_button.clicked.connect(self.open_delete_sign_dialog)
+        manage_row.addWidget(self.delete_sign_button)
+
+        outer.addLayout(manage_row)
 
         return controls_frame
 
@@ -530,8 +553,8 @@ class MainWindow(QMainWindow):
         if self.is_recording:
             self._apply_sign_state(STATE_READY)
 
-    @pyqtSlot(object)
-    def on_landmarks_detected(self, landmarks_list):
+    @pyqtSlot(object, object)
+    def on_landmarks_detected(self, landmarks_list, face_ref=None):
         if not self.is_recording:
             return
         # No hand visible — reset so the same sign can be spoken again next time
@@ -546,7 +569,7 @@ class MainWindow(QMainWindow):
 
         # ── Step 1: Always feed frames into LSTM buffer ──────────────────
         if self.use_lstm:
-            self.lstm_classifier.push_frame(landmarks)
+            self.lstm_classifier.push_frame(landmarks, face_ref)
             fill = self.lstm_classifier.buffer_fill()
             self.lstm_fill_bar.setValue(int(fill * 100))
 

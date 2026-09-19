@@ -35,7 +35,7 @@ LABELS_CSV      = os.path.join(SEQUENCE_DIR, "labels.csv")
 MODELS_DIR      = "models"
 LOG_PATH        = os.path.join(MODELS_DIR, "training_log.jsonl")
 SEQUENCE_LENGTH = 30
-FEATURE_LENGTH  = 63
+FEATURE_LENGTH  = 65   # 63 hand + 2 face-relative (see src/normalize.py)
 
 
 # ── Data loading ──────────────────────────────────────────────────────────────
@@ -79,13 +79,21 @@ def _time_warp(seq, rng):
 
 
 def _per_joint_jitter(seq, rng, sigma=0.008):
-    """Add small independent, sequence-consistent offsets per landmark joint."""
+    """Add small independent, sequence-consistent offsets per landmark joint.
+
+    Only touches the 63 hand-landmark features (21 joints x, y, z) — any
+    trailing face-relative features (see src/normalize.py) aren't joints
+    and don't reshape into groups of 3, so they're left untouched.
+    """
     T, F = seq.shape
-    n_joints = F // 3
+    hand_len = min(F, 63)
+    n_joints = hand_len // 3
+    out = seq.copy()
     joint_offsets = rng.normal(0, sigma, (1, n_joints, 3)).astype(np.float32)
     joint_offsets = np.tile(joint_offsets, (T, 1, 1))
-    out = seq.reshape(T, n_joints, 3) + joint_offsets
-    return out.reshape(T, F).astype(np.float32)
+    hand = seq[:, :hand_len].reshape(T, n_joints, 3) + joint_offsets
+    out[:, :hand_len] = hand.reshape(T, hand_len)
+    return out.astype(np.float32)
 
 
 def _temporal_dropout(seq, rng, drop_rate=0.1):
@@ -122,17 +130,22 @@ def _rotation_jitter(seq, rng, max_deg=15):
     already wrist-centered by normalize_landmarks, so this rotates in place
     and does not need a separate pivot. Z is left untouched (depth axis is
     less reliably estimated by MediaPipe and rotating it adds noise, not
-    signal).
+    signal). Only the 63 hand-landmark features are rotated — any trailing
+    face-relative features (see src/normalize.py) aren't (x, y, z) joints
+    and are left untouched.
     """
     T, F = seq.shape
-    n_joints = F // 3
+    hand_len = min(F, 63)
+    n_joints = hand_len // 3
     angle = np.deg2rad(rng.uniform(-max_deg, max_deg))
     c, s = np.cos(angle), np.sin(angle)
-    out = seq.reshape(T, n_joints, 3).copy()
-    x, y = out[..., 0].copy(), out[..., 1].copy()
-    out[..., 0] = c * x - s * y
-    out[..., 1] = s * x + c * y
-    return out.reshape(T, F).astype(np.float32)
+    out = seq.copy()
+    hand = seq[:, :hand_len].reshape(T, n_joints, 3).copy()
+    x, y = hand[..., 0].copy(), hand[..., 1].copy()
+    hand[..., 0] = c * x - s * y
+    hand[..., 1] = s * x + c * y
+    out[:, :hand_len] = hand.reshape(T, hand_len)
+    return out.astype(np.float32)
 
 
 def augment_sequence(seq, n=50, rng=None):

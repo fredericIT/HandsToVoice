@@ -24,10 +24,10 @@ class HandDetector:
         self.frame_count = 0
         self._timestamp_ms = 0
 
-        model_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "models", "hand_landmarker.task"
+        models_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models"
         )
+        model_path = os.path.join(models_dir, "hand_landmarker.task")
 
         try:
             import mediapipe as mp
@@ -53,6 +53,32 @@ class HandDetector:
         except Exception as e:
             logger.info(f"[Detector] MediaPipe unavailable ({e}). Using fallback.")
             self._bg = cv2.createBackgroundSubtractorMOG2(detectShadows=True)
+
+        # Face detector — gives a stable body-relative reference point (see
+        # src/normalize.py) so signs that differ only by WHERE on the body
+        # the hand touches aren't indistinguishable to the model. Best
+        # effort: if unavailable, face_ref just comes back None everywhere
+        # and normalization falls back to hand-shape-only as before.
+        self._face_available = False
+        self._face_timestamp_ms = 0
+        try:
+            import mediapipe as mp
+            from mediapipe.tasks import python as mp_python
+            from mediapipe.tasks.python import vision as mp_vision
+
+            face_model_path = os.path.join(models_dir, "face_detector.tflite")
+            face_base_options = mp_python.BaseOptions(model_asset_path=face_model_path)
+            face_options = mp_vision.FaceDetectorOptions(
+                base_options=face_base_options,
+                running_mode=mp_vision.RunningMode.VIDEO,
+                min_detection_confidence=0.5,
+            )
+            self._face_detector = mp_vision.FaceDetector.create_from_options(face_options)
+            self._face_available = True
+            logger.info("[Detector] MediaPipe Face Detector initialized successfully")
+        except Exception as e:
+            logger.info(f"[Detector] Face detector unavailable ({e}) — "
+                        f"signs will be distinguished by hand shape only.")
 
     def process_frame(self, bgr_frame):
         """Return (annotated_frame, landmarks_list).
@@ -143,9 +169,40 @@ class HandDetector:
             lms.extend([x, y, float(np.random.uniform(-0.1, 0.1))])
         return np.array(lms, dtype=np.float32)
 
+    def detect_face_ref(self, bgr_frame):
+        """Return (cx, cy, width) of the detected face in normalized [0, 1]
+        image coordinates, or None if unavailable/no face found.
+
+        Used to compute the hand's position relative to the body (see
+        src/normalize.py) — a separate, lightweight call from
+        process_frame() since most callers (raw data collection, the
+        static classifier) don't need it.
+        """
+        if not self._face_available:
+            return None
+        try:
+            rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+            mp_image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
+            self._face_timestamp_ms += 33
+            result = self._face_detector.detect_for_video(mp_image, self._face_timestamp_ms)
+            if not result.detections:
+                return None
+
+            h, w = bgr_frame.shape[:2]
+            box = result.detections[0].bounding_box
+            cx = (box.origin_x + box.width / 2) / w
+            cy = (box.origin_y + box.height / 2) / h
+            face_width = box.width / w
+            return (cx, cy, face_width)
+        except Exception as e:
+            logger.error(f"[Detector] Face detection error: {e}")
+            return None
+
     def close(self):
         if self._mediapipe_available and hasattr(self, '_landmarker'):
             self._landmarker.close()
+        if self._face_available and hasattr(self, '_face_detector'):
+            self._face_detector.close()
 
     def __enter__(self):
         return self

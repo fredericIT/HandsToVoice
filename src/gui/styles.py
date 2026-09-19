@@ -229,11 +229,40 @@ QPushButton#clearButton {
     background-color: transparent;
     color: #FF6B6B;
     border: 1px solid #FF6B6B;
-    min-width: 80px;
+    padding: 10px 20px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    min-width: 120px;
 }
 
 QPushButton#clearButton:hover {
     background-color: rgba(255, 107, 107, 0.1);
+}
+
+/* Neutral secondary actions — Undo, Clear: reversible, low-stakes,
+   never destructive, so they don't get the red "danger" treatment. */
+QPushButton#neutralButton {
+    background-color: transparent;
+    color: #8899AA;
+    border: 1px solid #2A3A4A;
+    padding: 10px 20px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    min-width: 120px;
+}
+
+QPushButton#neutralButton:hover {
+    background-color: #1E2D3D;
+    color: #E8ECF1;
+    border-color: #3A4A5A;
+}
+
+QPushButton#neutralButton:disabled {
+    background-color: transparent;
+    color: #3A4756;
+    border-color: #1E2D3D;
 }
 
 /* ─── Progress Bar (Confidence) ──────────────────────────── */

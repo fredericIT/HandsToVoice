@@ -12,8 +12,8 @@ from PyQt5.QtGui import QImage, QPixmap
 class CameraWidget(QWidget):
     """Displays live webcam feed with hand landmark overlay."""
 
-    # Emitted when a new frame with landmarks is ready
-    landmarks_detected = pyqtSignal(object)   # list of landmark arrays
+    # Emitted when a new frame with landmarks is ready: (landmarks_list, face_ref)
+    landmarks_detected = pyqtSignal(object, object)
 
     def __init__(self, camera, detector, parent=None):
         super().__init__(parent)
@@ -96,7 +96,8 @@ class CameraWidget(QWidget):
         self.image_label.setPixmap(pixmap)
 
         if landmarks_list:
-            self.landmarks_detected.emit(landmarks_list)
+            face_ref = self.detector.detect_face_ref(frame)
+            self.landmarks_detected.emit(landmarks_list, face_ref)
 
         self._frame_count += 1
 

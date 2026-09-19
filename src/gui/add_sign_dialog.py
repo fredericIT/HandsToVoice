@@ -27,7 +27,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 VIDEO_DIR = "data/videos"
 SEQUENCE_DIR = "data/sequences"
 SEQUENCE_LENGTH = 30
-FEATURE_LENGTH = 63
+FEATURE_LENGTH = 65   # 63 hand + 2 face-relative (see src/normalize.py)
+HAND_FEATURE_LENGTH = 63
 TEST_CONFIDENCE_THRESHOLD = 0.5
 
 
@@ -52,6 +53,7 @@ class TrainWorker(QThread):
 
     def _extract(self):
         from src.detector import HandDetector
+        from src.normalize import normalize_landmarks
         self.log.emit("[1/2] Extracting landmarks from videos...")
         detector = HandDetector()
         sign_folder = os.path.join(VIDEO_DIR, self.sign_label)
@@ -86,13 +88,30 @@ class TrainWorker(QThread):
                     break
                 _, lm_list = detector.process_frame(frame)
                 if lm_list:
-                    frames_lm.append(lm_list[0])
+                    # Must match live inference (LSTMClassifier.push_frame,
+                    # which always normalizes) and the original
+                    # extract_video_landmarks.py pipeline. Without this, the
+                    # model trains on raw image-space coordinates — position
+                    # and distance-from-camera dependent — while inference
+                    # feeds it wrist-centered, scale-invariant ones: a
+                    # fundamental train/inference feature mismatch.
+                    face_ref = detector.detect_face_ref(frame)
+                    frames_lm.append(normalize_landmarks(lm_list[0], face_ref))
                 else:
                     frames_lm.append(np.zeros(FEATURE_LENGTH, dtype=np.float32))
             cap.release()
 
+            # Trim leading/trailing frames where no hand was detected at
+            # all — the "before you raised your hand" / "after you lowered
+            # it" dead time at the edges of a fixed-duration recording.
+            # Live recognition's sliding window only ever sees frames while
+            # a hand IS present, so evenly resampling a clip that's mostly
+            # such dead time badly dilutes the actual sign motion and
+            # mismatches what the model sees at inference time.
+            frames_lm = self._trim_to_hand_presence(frames_lm)
+
             if len(frames_lm) < 3:
-                self.log.emit(f"  ⚠ Skipped {vfile} (too few frames)")
+                self.log.emit(f"  ⚠ Skipped {vfile} (too few frames with a hand detected)")
                 continue
 
             seq = self._pad_or_trim(frames_lm, SEQUENCE_LENGTH)
@@ -112,6 +131,19 @@ class TrainWorker(QThread):
 
         detector.close()
         self.log.emit(f"[1/2] Done — {len(new_rows)} sequences extracted\n")
+
+    @staticmethod
+    def _trim_to_hand_presence(frames_lm):
+        """Drop leading/trailing frames with no detected hand (all-zero
+        landmark vector), keeping only the span where a hand was actually
+        in frame. Returns the input unchanged if no hand was ever detected
+        (caller's frame-count check will then skip the clip)."""
+        present = [not np.allclose(f, 0.0) for f in frames_lm]
+        if not any(present):
+            return frames_lm
+        first = present.index(True)
+        last = len(present) - 1 - present[::-1].index(True)
+        return frames_lm[first:last + 1]
 
     @staticmethod
     def _pad_or_trim(frames, target_len):
@@ -161,13 +193,32 @@ class TrainWorker(QThread):
         nc = len(le.classes_)
         self.log.emit(f"  {nc} classes: {list(le.classes_)}")
 
-        # Augment
+        # Split ORIGINAL (unaugmented) sequences into train/val first, per
+        # class. Augmenting before splitting — the previous behavior — put
+        # near-duplicate copies of the same clip (tiny noise/scale/shift) on
+        # both sides of the split, so validation accuracy just measured
+        # memorization of near-twins and reported ~100% even when the model
+        # didn't generalize to a real new attempt at the sign on webcam.
         rng = np.random.default_rng(42)
-        n_aug = max(20, 100 // len(X))
-        X_aug, y_aug = [], []
-        for seq, lbl in zip(X, y_enc):
-            X_aug.append(seq)
-            y_aug.append(lbl)
+        train_idx, val_idx = [], []
+        for cls in np.unique(y_enc):
+            cls_idx = np.where(y_enc == cls)[0]
+            rng.shuffle(cls_idx)
+            n_val_cls = max(1, int(len(cls_idx) * 0.15)) if len(cls_idx) > 1 else 0
+            val_idx.extend(cls_idx[:n_val_cls])
+            train_idx.extend(cls_idx[n_val_cls:])
+        train_idx = np.array(train_idx)
+        val_idx = np.array(val_idx)
+
+        X_train_raw, y_train_raw = X[train_idx], y_enc[train_idx]
+        X_val, y_val = X[val_idx], y_enc[val_idx]   # left unaugmented — real generalization check
+
+        # Augment only the training portion
+        n_aug = max(20, 100 // max(1, len(X_train_raw)))
+        X_train, y_train = [], []
+        for seq, lbl in zip(X_train_raw, y_train_raw):
+            X_train.append(seq)
+            y_train.append(lbl)
             for _ in range(n_aug - 1):
                 s = seq.copy()
                 s += rng.normal(0, 0.01, s.shape).astype(np.float32)
@@ -175,16 +226,24 @@ class TrainWorker(QThread):
                 shift = rng.integers(-3, 4)
                 s = np.roll(s, shift, axis=0)
                 if rng.random() > 0.5:
-                    x_idx = np.arange(0, FEATURE_LENGTH, 3)
-                    s[:, x_idx] = 1.0 - s[:, x_idx]
-                X_aug.append(s.astype(np.float32))
-                y_aug.append(lbl)
+                    # Left-right mirror. These sequences are already
+                    # wrist-centered/scaled by this point (normalize_landmarks
+                    # ran during extraction), so a mirror is negation, not
+                    # "1.0 - x" — that formula only makes sense for raw
+                    # [0, 1] image coordinates. Also negate the face-relative
+                    # horizontal offset (rel_x); rel_y is untouched since a
+                    # left-right flip doesn't affect vertical position.
+                    hand_x_idx = np.arange(0, HAND_FEATURE_LENGTH, 3)
+                    s[:, hand_x_idx] = -s[:, hand_x_idx]
+                    s[:, HAND_FEATURE_LENGTH] = -s[:, HAND_FEATURE_LENGTH]
+                X_train.append(s.astype(np.float32))
+                y_train.append(lbl)
 
-        X_aug = np.array(X_aug, dtype=np.float32)
-        y_aug = np.array(y_aug)
-        idx = np.random.permutation(len(X_aug))
-        X_aug, y_aug = X_aug[idx], y_aug[idx]
-        self.log.emit(f"  Augmented: {X_aug.shape[0]} samples")
+        X_train = np.array(X_train, dtype=np.float32)
+        y_train = np.array(y_train)
+        perm = rng.permutation(len(X_train))
+        X_train, y_train = X_train[perm], y_train[perm]
+        self.log.emit(f"  Train: {len(X_train)} (augmented)  Val: {len(X_val)} (real, unaugmented)")
 
         # Build model
         from tensorflow.keras import Sequential
@@ -201,12 +260,6 @@ class TrainWorker(QThread):
         ], name="ksl_lstm")
         model.compile(optimizer="adam", loss="sparse_categorical_crossentropy",
                       metrics=["accuracy"])
-
-        # Train
-        split = max(1, int(len(X_aug) * 0.15))
-        X_train, X_val = X_aug[split:], X_aug[:split]
-        y_train, y_val = y_aug[split:], y_aug[:split]
-        self.log.emit(f"  Train: {len(X_train)}  Val: {len(X_val)}")
 
         cb = [
             keras.callbacks.EarlyStopping(patience=12, restore_best_weights=True,
@@ -877,7 +930,8 @@ class AddSignDialog(QDialog):
 
             if lm_list and self._test_lstm and self._test_lstm.is_ready():
                 landmarks = lm_list[0]
-                self._test_lstm.push_frame(landmarks)
+                face_ref = self._test_detector.detect_face_ref(frame)
+                self._test_lstm.push_frame(landmarks, face_ref)
                 fill = self._test_lstm.buffer_fill()
                 self.test_buffer_bar.setValue(int(fill * 100))
 
@@ -1047,10 +1101,19 @@ class AddSignDialog(QDialog):
             except Exception as e:
                 logger.error(f"[AddSignDialog] Voice preview error: {e}")
 
-    def closeEvent(self, ev):
+    def _release_resources(self):
         self._stop_camera()
         self._stop_test_camera()
         self._stop_voice_recording()
         if self._worker and self._worker.isRunning():
             self._worker.wait(3000)
+
+    def done(self, result):
+        # accept()/reject() (Close button, Esc) never fire closeEvent, which
+        # left the camera locked and stopped the main window reopening it.
+        self._release_resources()
+        super().done(result)
+
+    def closeEvent(self, ev):
+        self._release_resources()
         ev.accept()

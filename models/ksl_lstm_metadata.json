@@ -1,15 +1,33 @@
 {
   "model_type": "lstm",
   "sequence_length": 30,
-  "feature_length": 63,
-  "num_classes": 5,
+  "feature_length": 65,
+  "num_classes": 23,
   "classes": [
+    "abana",
     "amazina_yange",
     "ameze",
+    "benshi",
+    "gusangiza",
+    "kucyumweru",
+    "kuwa_gatandatu",
+    "kuwa_gatanu",
+    "kuwa_gatatu",
+    "kuwa_kabiri",
+    "kuwa_kane",
+    "mama",
+    "marume",
+    "masenge",
     "muraho",
+    "mwiza",
     "neza",
+    "ngewe",
+    "ni",
+    "nyabuneka",
+    "papa",
+    "tugiye",
     "umunsi"
   ],
   "test_accuracy": 1.0,
-  "timestamp": "2026-09-18T13:20:34.151226"
+  "timestamp": "2026-09-19T15:18:27.263047"
 }
