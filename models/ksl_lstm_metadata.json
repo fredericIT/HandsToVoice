@@ -2,7 +2,7 @@
   "model_type": "lstm",
   "sequence_length": 30,
   "feature_length": 65,
-  "num_classes": 23,
+  "num_classes": 29,
   "classes": [
     "abana",
     "amazina_yange",
@@ -18,16 +18,22 @@
     "mama",
     "marume",
     "masenge",
+    "mbabarira",
     "muraho",
     "mwiza",
+    "ndagukunda",
     "neza",
     "ngewe",
     "ni",
     "nyabuneka",
+    "oya",
     "papa",
     "tugiye",
-    "umunsi"
+    "umeze_gute_??",
+    "umunsi",
+    "wowe",
+    "yego"
   ],
-  "test_accuracy": 1.0,
-  "timestamp": "2026-09-19T15:18:27.263047"
+  "test_accuracy": 0.9142857193946838,
+  "timestamp": "2026-09-19T19:16:28.484773"
 }

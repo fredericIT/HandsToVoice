@@ -14,10 +14,10 @@ from PyQt5.QtWidgets import (
     QListWidgetItem, QGroupBox, QFormLayout, QLineEdit, QComboBox,
     QProgressBar, QMessageBox, QWidget, QSplitter
 )
-from PyQt5.QtCore import Qt, QTimer, QUrl, pyqtSignal
-from PyQt5.QtMultimedia import QAudioRecorder, QAudioEncoderSettings, QMultimedia
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 
 from src.logger import get_logger
+from src.gui.voice_manager_dialog import _trim_silence
 
 logger = get_logger("gui.edit_sign_dialog")
 
@@ -36,9 +36,16 @@ class EditSignDialog(QDialog):
         self.tts = tts
         self.selected_label = None
 
-        # Voice recording
-        self.recorder = QAudioRecorder(self)
+        # Voice recording — uses arecord directly (see start_recording),
+        # not Qt Multimedia's QAudioRecorder: that backend depends on
+        # GStreamer's PipeWire/PulseAudio input plugin being present and
+        # correctly configured, which isn't guaranteed on this system, and
+        # it failed silently (recorded pure silence with no error) rather
+        # than surfacing the problem.
         self.is_recording = False
+        self._record_proc = None
+        self._record_temp_file = None
+        self._record_dest_file = None
 
         self.record_timer = QTimer(self)
         self.record_timer.setSingleShot(True)
@@ -257,15 +264,31 @@ class EditSignDialog(QDialog):
             self.list_widget.addItem(item)
 
     def _populate_devices(self):
+        """List recording devices via arecord -l — same source of truth as
+        VoiceManagerDialog, so device selection behaves identically."""
         self.device_combo.clear()
-        inputs = self.recorder.audioInputs()
-        if inputs:
-            self.device_combo.addItems(inputs)
-            default_idx = inputs.index("default:") if "default:" in inputs else 0
-            self.device_combo.setCurrentIndex(default_idx)
-        else:
-            self.device_combo.addItem("No microphone detected")
-            self.btn_record.setEnabled(False)
+        devices = ["default (system)"]
+        try:
+            out = subprocess.check_output(
+                ["arecord", "-l"], stderr=subprocess.DEVNULL, text=True
+            )
+            for line in out.splitlines():
+                if line.startswith("card "):
+                    parts = line.split(":")
+                    if len(parts) >= 2:
+                        card_num = parts[0].strip().split()[-1]
+                        dev_part = parts[1].split(",")[0].strip()
+                        devices.append(f"plughw:{card_num},0  ({dev_part})")
+        except Exception:
+            pass
+        self.device_combo.addItems(devices)
+        self.device_combo.setCurrentIndex(0)
+
+    def _arecord_device(self):
+        text = self.device_combo.currentText()
+        if text.startswith("plughw:"):
+            return text.split()[0]
+        return "default"
 
     # ── Slot: sign selected ──────────────────────────────────────────────────
 
@@ -295,9 +318,7 @@ class EditSignDialog(QDialog):
         self._refresh_voice_status()
 
     def _on_device_changed(self, idx):
-        device = self.device_combo.itemText(idx)
-        if device and device != "No microphone detected":
-            self.recorder.setAudioInput(device)
+        pass  # device is resolved in start_recording from combo text
 
     def _clear_form(self):
         self.lbl_slug.setText("—")
@@ -379,25 +400,35 @@ class EditSignDialog(QDialog):
         except Exception:
             pass
 
-        settings = QAudioEncoderSettings()
-        settings.setCodec("audio/x-raw")
-        settings.setSampleRate(22050)
-        settings.setChannelCount(1)
-        settings.setQuality(QMultimedia.NormalQuality)
-        settings.setEncodingMode(QMultimedia.ConstantQualityEncoding)
-
-        self.recorder.setEncodingSettings(settings)
-        self.recorder.setContainerFormat("audio/x-wav")
-
-        output_file = os.path.join(self.tts.audio_dir, f"{self.selected_label}.wav")
-        if os.path.exists(output_file):
+        dest = os.path.abspath(
+            os.path.join(self.tts.audio_dir, f"{self.selected_label}.wav")
+        )
+        temp = dest + ".tmp"
+        self._record_dest_file = dest
+        self._record_temp_file = temp
+        if os.path.exists(temp):
             try:
-                os.unlink(output_file)
+                os.unlink(temp)
             except Exception:
                 pass
 
-        self.recorder.setOutputLocation(QUrl.fromLocalFile(output_file))
-        self.recorder.record()
+        device = self._arecord_device()
+        try:
+            self._record_proc = subprocess.Popen(
+                ["arecord", "-D", device, "-f", "S16_LE", "-r", "22050", "-c", "1", temp],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            self.lbl_voice_status.setText("❌ arecord not found — install alsa-utils")
+            self.lbl_voice_status.setStyleSheet("color:#FF6B6B; font-weight:bold;")
+            return
+        except Exception as e:
+            self.lbl_voice_status.setText(f"❌ Recording error: {e}")
+            self.lbl_voice_status.setStyleSheet("color:#FF6B6B; font-weight:bold;")
+            logger.error(f"[EditSign] arecord launch error: {e}")
+            return
+
         self.is_recording = True
 
         self.btn_record.setText("⏹️  Stop Recording")
@@ -427,24 +458,86 @@ class EditSignDialog(QDialog):
         self.record_timer.stop()
         self.elapsed_timer.stop()
 
-        if self.recorder.state() == QAudioRecorder.RecordingState:
-            self.recorder.stop()
-
-        time.sleep(0.2)
-
         self.btn_record.setText("🎙️  Record Voice")
         self.btn_record.setStyleSheet(
             "QPushButton { background:#FF6B6B; color:#0F1419; border:none;"
             " font-weight:bold; padding:10px; border-radius:8px; }"
             "QPushButton:hover { background:#FF8585; }"
         )
+        self.lbl_voice_status.setText("⏳ Saving recording…")
+        self.lbl_voice_status.setStyleSheet("color:#FFD93D; font-weight:bold;")
+
+        proc = self._record_proc
+        temp = self._record_temp_file
+        dest = self._record_dest_file
+        label = self.selected_label
+
+        def _finish():
+            if proc is not None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+
+            time.sleep(0.15)
+
+            ok = temp and dest and os.path.exists(temp) and os.path.getsize(temp) > 4096
+            no_voice = False
+            if ok:
+                try:
+                    if not _trim_silence(temp):
+                        ok = False
+                        no_voice = True
+                except Exception as e:
+                    logger.error(f"[EditSign] Trim error: {e}")
+
+            if ok:
+                try:
+                    if os.path.exists(dest):
+                        os.unlink(dest)
+                    os.rename(temp, dest)
+                    logger.info(f"[EditSign] ✔ Saved (trimmed): {dest}")
+                except Exception as e:
+                    logger.error(f"[EditSign] ✘ Rename failed: {e}")
+                    ok = False
+            else:
+                logger.info(
+                    f"[EditSign] ✘ {'No voice detected' if no_voice else 'Recording empty/missing'}"
+                    " — old file kept"
+                )
+                if temp and os.path.exists(temp):
+                    try:
+                        os.unlink(temp)
+                    except Exception:
+                        pass
+
+            QTimer.singleShot(0, lambda: self._on_recording_saved(label, ok, no_voice))
+
+        threading.Thread(target=_finish, daemon=True).start()
+
+    def _on_recording_saved(self, label, success, no_voice):
         self.voice_progress.setValue(100)
         self.voice_progress.setStyleSheet(
             "QProgressBar { background:#0F1419; border:1px solid #2A3A4A; border-radius:4px; }"
             "QProgressBar::chunk { background:#FF6B6B; border-radius:4px; }"
         )
-        self._refresh_list_item(self.selected_label)
-        self._refresh_voice_status()
+        if success:
+            self.lbl_voice_status.setText("✅ Recording saved! (trimmed to spoken audio)")
+            self.lbl_voice_status.setStyleSheet("color:#00D4AA; font-weight:bold;")
+        elif no_voice:
+            self.lbl_voice_status.setText("⚠️ No voice detected — check mic and speak clearly, then retry")
+            self.lbl_voice_status.setStyleSheet("color:#FF6B6B; font-weight:bold;")
+        else:
+            self.lbl_voice_status.setText("❌ Recording failed — please try again")
+            self.lbl_voice_status.setStyleSheet("color:#FF6B6B; font-weight:bold;")
+
+        if label == self.selected_label:
+            self._refresh_list_item(label)
+            self._refresh_voice_status()
 
     def _on_elapsed_tick(self):
         elapsed = time.time() - self.elapsed_start
@@ -532,6 +625,11 @@ class EditSignDialog(QDialog):
             self._refresh_voice_status()
         except Exception as e:
             QMessageBox.critical(self, "Delete Error", str(e))
+
+    def done(self, result):
+        # The Close/Save buttons call accept(), which never fires closeEvent.
+        self.stop_recording()
+        super().done(result)
 
     def closeEvent(self, event):
         self.stop_recording()

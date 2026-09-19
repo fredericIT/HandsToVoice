@@ -143,12 +143,48 @@
             "kinyarwanda": "tugiye",
             "english": "we are going",
             "category": "common"
+        },
+        "umeze_gute_??": {
+            "id": 25,
+            "kinyarwanda": "umeze gute ??",
+            "english": "how are you ?",
+            "category": "common"
+        },
+        "yego": {
+            "id": 26,
+            "kinyarwanda": "yego",
+            "english": "yes",
+            "category": "common"
+        },
+        "oya": {
+            "id": 27,
+            "kinyarwanda": "oya",
+            "english": "no",
+            "category": "common"
+        },
+        "mbabarira": {
+            "id": 28,
+            "kinyarwanda": "mbabarira",
+            "english": "sorry",
+            "category": "common"
+        },
+        "wowe": {
+            "id": 29,
+            "kinyarwanda": "wowe",
+            "english": "you",
+            "category": "common"
+        },
+        "ndagukunda": {
+            "id": 30,
+            "kinyarwanda": "ndagukunda",
+            "english": "i love you",
+            "category": "common"
         }
     },
     "metadata": {
         "version": "1.0",
         "language": "Kinyarwanda",
-        "total_signs": 24,
+        "total_signs": 30,
         "description": "Demo vocabulary for HandsToVoice KSL recognition system"
     }
 }
