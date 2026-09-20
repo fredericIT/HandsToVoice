@@ -6,12 +6,6 @@
             "english": "hello",
             "category": "common"
         },
-        "neza": {
-            "id": 1,
-            "kinyarwanda": "neza",
-            "english": "good",
-            "category": "common"
-        },
         "umunsi": {
             "id": 2,
             "kinyarwanda": "umunsi",
@@ -22,12 +16,6 @@
             "id": 3,
             "kinyarwanda": "ameze",
             "english": "she /he is",
-            "category": "common"
-        },
-        "mwiza": {
-            "id": 5,
-            "kinyarwanda": "mwiza",
-            "english": "good",
             "category": "common"
         },
         "kuwambere": {
@@ -179,12 +167,54 @@
             "kinyarwanda": "ndagukunda",
             "english": "i love you",
             "category": "common"
+        },
+        "neza": {
+            "id": 31,
+            "kinyarwanda": "neza",
+            "english": "well",
+            "category": "common"
+        },
+        "mwiza": {
+            "id": 32,
+            "kinyarwanda": "mwiza",
+            "english": "mwiza",
+            "category": "common"
+        },
+        "itonde": {
+            "id": 33,
+            "kinyarwanda": "itonde",
+            "english": "be careful",
+            "category": "greetings"
+        },
+        "uyu_munsi": {
+            "id": 34,
+            "kinyarwanda": "uyu munsi",
+            "english": "today",
+            "category": "common"
+        },
+        "atandukanye": {
+            "id": 35,
+            "kinyarwanda": "atandukanye",
+            "english": "different",
+            "category": "common"
+        },
+        "tangira": {
+            "id": 36,
+            "kinyarwanda": "tangira",
+            "english": "start",
+            "category": "emergency"
+        },
+        "birasobanutse": {
+            "id": 37,
+            "kinyarwanda": "birasobanutse",
+            "english": "birasobanutse",
+            "category": "common"
         }
     },
     "metadata": {
         "version": "1.0",
         "language": "Kinyarwanda",
-        "total_signs": 30,
+        "total_signs": 35,
         "description": "Demo vocabulary for HandsToVoice KSL recognition system"
     }
 }
