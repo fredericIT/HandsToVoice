@@ -44,7 +44,7 @@ class MainWindow(QMainWindow):
     CONFIRM_DELAY_MS = 1500
 
     def __init__(self, camera, detector, classifier, tts, vocabulary,
-                 lstm_classifier=None):
+                 lstm_classifier=None, speech_listener=None):
         super().__init__()
 
         # System components
@@ -97,7 +97,7 @@ class MainWindow(QMainWindow):
         self.setup_connections()
         self._apply_sign_state(STATE_IDLE)
         self.update_ui_state()
-        self._start_listening()
+        self._start_listening(speech_listener)
 
     # ── UI construction ──────────────────────────────────────────────────────
     def setup_ui(self):
@@ -718,14 +718,29 @@ class MainWindow(QMainWindow):
             return
 
     # ── Listening: speech in -> sign video out ───────────────────────────────
-    def _start_listening(self):
+    def _start_listening(self, existing=None):
+        """existing: an already-started SpeechListener (see main.py), which
+        was kicked off in parallel with camera/model loading instead of
+        sequentially after this window was built — otherwise its ~15-20s
+        model load was added on top of camera/model init instead of
+        overlapping it. Falls back to creating a fresh one (e.g. when
+        re-enabling via the toolbar button after stop_listening())."""
         if self.speech_listener is not None:
             return
-        self.speech_listener = SpeechListener(self._vocab_words())
+        if existing is not None:
+            self.speech_listener = existing
+            self.speech_listener.update_vocab(self._vocab_words())
+        else:
+            self.speech_listener = SpeechListener(self._vocab_words())
+            self.speech_listener.start()
         self.speech_listener.words_heard.connect(self._on_words_heard)
         self.speech_listener.mic_silent.connect(self._on_mic_silent)
         self.speech_listener.model_status.connect(self._on_listen_model_status)
-        self.speech_listener.start()
+        # The listener may already have finished loading (or failed) before
+        # we could connect just now, in which case that earlier model_status
+        # signal was already emitted and missed — read its current state
+        # directly instead of waiting for a signal that already fired.
+        self._on_listen_model_status(self.speech_listener.status)
 
     def stop_listening(self):
         if self.speech_listener is not None:

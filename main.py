@@ -41,6 +41,16 @@ from src.logger import get_logger
 
 logger = get_logger("main")
 
+# Set to True for the final submission/demo — shows the welcome screen as the
+# mandatory entry gate. Left False during day-to-day development so the app
+# jumps straight to the main window on every run.
+SHOW_WELCOME_SCREEN = False
+
+# Same idea for the animated loading screen shown while the camera/models
+# initialize. Left False during development so nothing appears until the
+# main window itself is ready.
+SHOW_LOADING_SCREEN = False
+
 
 class _ComponentInitWorker(QThread):
     """Loads the camera, detector, classifiers, and voice engine off the
@@ -93,6 +103,7 @@ class HandsToVoiceApp:
         self.loading_screen = None
         self._init_worker = None
         self._signal_timer = None
+        self.speech_listener = None
 
         # Initialize core components
         self.camera = None
@@ -111,7 +122,8 @@ class HandsToVoiceApp:
                 classifier=self.classifier,
                 tts=self.tts,
                 vocabulary=self.vocabulary,
-                lstm_classifier=self.lstm_classifier
+                lstm_classifier=self.lstm_classifier,
+                speech_listener=self.speech_listener,
             )
 
             # Setup signal handling for graceful shutdown
@@ -143,11 +155,15 @@ class HandsToVoiceApp:
         load_bundled_fonts()
         self.app.setStyleSheet(get_stylesheet())
 
-        self.welcome_screen = WelcomeScreen()
-        self.welcome_screen.continue_requested.connect(self._start_main_app)
-        self.welcome_screen.show()
+        if SHOW_WELCOME_SCREEN:
+            self.welcome_screen = WelcomeScreen()
+            self.welcome_screen.continue_requested.connect(self._start_main_app)
+            self.welcome_screen.show()
+            logger.info("[System] Welcome screen shown")
+        else:
+            logger.info("[System] Welcome screen skipped (SHOW_WELCOME_SCREEN=False)")
+            self._start_main_app()
 
-        logger.info("[System] Welcome screen shown")
         return self.app.exec_()
 
     def _start_main_app(self):
@@ -158,8 +174,21 @@ class HandsToVoiceApp:
         feels instant instead of freezing the window for the several
         seconds real initialization takes.
         """
-        self.loading_screen = LoadingScreen()
-        self.loading_screen.show()
+        if SHOW_LOADING_SCREEN:
+            self.loading_screen = LoadingScreen()
+            self.loading_screen.show()
+
+        # NOTE: starting SpeechListener here, in parallel with the
+        # camera/TensorFlow init below, was tried to shave load time off
+        # (its ~15-20s model load otherwise runs sequentially after the
+        # ~8s camera/model init — see MainWindow._start_listening). It was
+        # reverted: importing torch (inside SpeechListener's thread) at the
+        # same time TensorFlow is initializing (in _ComponentInitWorker's
+        # thread) reproducibly deadlocked the whole process at flat CPU —
+        # pre-importing bare `torch` on the main thread (see top of this
+        # file) was not enough to prevent it. SpeechListener is instead
+        # created later, after the main window exists (see
+        # MainWindow._start_listening), same as before that attempt.
 
         self._init_worker = _ComponentInitWorker(self.camera_index)
         self._init_worker.ready.connect(self._on_components_ready)
@@ -200,6 +229,11 @@ class HandsToVoiceApp:
         if self.loading_screen:
             self.loading_screen.close()
             self.loading_screen = None
+        if self.speech_listener:
+            # Never got handed to a MainWindow to own — stop it ourselves
+            # so it doesn't keep running after the app quits.
+            self.speech_listener.stop()
+            self.speech_listener = None
         self._show_error(f"Failed to initialize system components: {message}")
         self.app.quit()
 

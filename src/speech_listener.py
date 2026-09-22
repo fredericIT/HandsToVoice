@@ -29,8 +29,15 @@ class Segmenter:
     """Cuts a stream of 16-bit samples into utterances separated by pauses."""
 
     def __init__(self, sr=SAMPLE_RATE, frame_ms=20, pause_ms=220,
-                 min_ms=200, max_ms=2500, start_frames=3, min_rms=350.0,
+                 min_ms=200, max_ms=2500, start_frames=3, min_rms=180.0,
                  noise_factor=2.5):
+        # min_rms is a hard floor below which a frame is never treated as
+        # speech, regardless of how quiet the room is — it exists so a
+        # near-silent room doesn't drop the "loud" threshold to near-zero
+        # and start triggering on faint background noise. Lowered from 350
+        # so quieter/softer speakers (not just one specific tested voice)
+        # still clear it; the room-noise-based threshold above this floor
+        # already adapts per speaker/mic via `noise_factor`.
         self.frame_len = int(sr * frame_ms / 1000)
         self.pause_frames = pause_ms // frame_ms
         self.min_frames = min_ms // frame_ms
@@ -150,6 +157,11 @@ class SpeechListener(QThread):
         self._last_shown = {}
         self._silent_for = 0.0
         self._silent_reported = False
+        self.status = "loading"   # mirrors model_status; lets a late
+                                   # connector (see MainWindow._start_listening)
+                                   # read the current state directly instead
+                                   # of missing a signal emitted before it
+                                   # connected
 
     def update_vocab(self, vocab_words):
         """Re-read the vocabulary (after signs are added/edited/deleted).
@@ -167,9 +179,11 @@ class SpeechListener(QThread):
 
     def run(self):
         self._running = True
+        self.status = "loading"
         self.model_status.emit("loading")
         self.recognizer.load()
-        self.model_status.emit("ready" if self.recognizer.ready else "failed")
+        self.status = "ready" if self.recognizer.ready else "failed"
+        self.model_status.emit(self.status)
         if not self.recognizer.ready:
             return
 
