@@ -8,12 +8,21 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QSizePolicy
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 
+from src.lighting import LOW_LIGHT, CHECK_EVERY, frame_brightness, draw_low_light_warning
+
 
 class CameraWidget(QWidget):
     """Displays live webcam feed with hand landmark overlay."""
 
     # Emitted when a new frame with landmarks is ready: (landmarks_list, face_ref)
     landmarks_detected = pyqtSignal(object, object)
+
+    # Face position barely changes frame-to-frame (unlike hand shape), so
+    # it's only re-detected every FACE_REF_EVERY frames and the last known
+    # value is reused in between — halves the per-frame ML cost (hand +
+    # face detection every frame) for a reference point that doesn't need
+    # frame-perfect tracking.
+    FACE_REF_EVERY = 5
 
     def __init__(self, camera, detector, parent=None):
         super().__init__(parent)
@@ -22,6 +31,9 @@ class CameraWidget(QWidget):
         self._running = False
         self._frame_count = 0
         self._fps = 0.0
+        self._last_face_ref = None
+        self._low_light = False
+        self._light_checks = 0
         self._setup_ui()
 
         self.timer = QTimer(self)
@@ -84,6 +96,13 @@ class CameraWidget(QWidget):
                     (10, 60), cv2.FONT_HERSHEY_SIMPLEX,
                     0.6, (136, 153, 170), 2)
 
+        # Warn when it's too dark for reliable hand detection
+        self._light_checks += 1
+        if self._light_checks % CHECK_EVERY == 1:
+            self._low_light = frame_brightness(frame) < LOW_LIGHT
+        if self._low_light:
+            draw_low_light_warning(annotated)
+
         # BGR → RGB → QPixmap
         rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
@@ -96,8 +115,16 @@ class CameraWidget(QWidget):
         self.image_label.setPixmap(pixmap)
 
         if landmarks_list:
-            face_ref = self.detector.detect_face_ref(frame)
-            self.landmarks_detected.emit(landmarks_list, face_ref)
+            # Retry every frame until a face is found, then only every
+            # FACE_REF_EVERY frames. A miss never overwrites the last known
+            # position: dropping to "no face" (zeros) is a sudden feature
+            # change the model handles badly, while a head that hasn't moved
+            # is still where it was a moment ago.
+            if self._last_face_ref is None or self._frame_count % self.FACE_REF_EVERY == 0:
+                found = self.detector.detect_face_ref(frame)
+                if found is not None:
+                    self._last_face_ref = found
+            self.landmarks_detected.emit(landmarks_list, self._last_face_ref)
 
         self._frame_count += 1
 

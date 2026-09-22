@@ -18,12 +18,6 @@
             "english": "she /he is",
             "category": "common"
         },
-        "kuwambere": {
-            "id": 6,
-            "kinyarwanda": "kuwa mbere",
-            "english": "Monday",
-            "category": "common"
-        },
         "ngewe": {
             "id": 7,
             "kinyarwanda": "ngewe",
@@ -209,12 +203,24 @@
             "kinyarwanda": "birasobanutse",
             "english": "birasobanutse",
             "category": "common"
+        },
+        "witeguye": {
+            "id": 38,
+            "kinyarwanda": "witeguye",
+            "english": "witeguye",
+            "category": "common"
+        },
+        "kuwa_mbere": {
+            "id": 39,
+            "kinyarwanda": "kuwa mbere",
+            "english": "monday",
+            "category": "common"
         }
     },
     "metadata": {
         "version": "1.0",
         "language": "Kinyarwanda",
-        "total_signs": 35,
+        "total_signs": 36,
         "description": "Demo vocabulary for HandsToVoice KSL recognition system"
     }
 }

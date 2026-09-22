@@ -52,6 +52,10 @@ class VoiceOutput:
         self.vocabulary = vocabulary
         self.audio_dir = audio_dir
         self._is_speaking = False
+        self._active_speakers = 0     # see _speak_impl: _is_speaking must
+                                       # stay True as long as ANY concurrent
+                                       # speak() call is still running,
+                                       # regardless of which one finishes first
         self._lock = threading.Lock()
         self._channel = None   # dedicated pygame channel for sign audio
         self._tts_engine = None  # pyttsx3 fallback engine
@@ -202,8 +206,19 @@ class VoiceOutput:
             t.start()
 
     def _speak_impl(self, text, label=None, labels=None):
-        """Internal: play audio on the calling thread."""
+        """Internal: play audio on the calling thread.
+
+        speak() starts a new daemon thread on every call without waiting
+        for a previous one to finish (e.g. back-to-back batches), so calls
+        can overlap in either order. Without the active-count tracking
+        below, whichever call happened to finish first would clear
+        _is_speaking even while another one was still actively playing —
+        which let the speech listener un-mute mid-playback and pick up the
+        system's own voice, corrupting its background-noise calibration so
+        it stopped hearing real speech afterward.
+        """
         with self._lock:
+            self._active_speakers += 1
             self._is_speaking = True
 
         try:
@@ -267,7 +282,9 @@ class VoiceOutput:
             logger.error(f"[Voice] Playback error: {e}")
         finally:
             with self._lock:
-                self._is_speaking = False
+                self._active_speakers = max(0, self._active_speakers - 1)
+                if self._active_speakers == 0:
+                    self._is_speaking = False
 
     # ── TTS fallback ──────────────────────────────────────────────────────────
 

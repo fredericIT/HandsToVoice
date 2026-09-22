@@ -23,6 +23,18 @@ from src.logger import get_logger
 logger = get_logger("gui.voice_manager_dialog")
 
 
+def _is_clipped(path, threshold=32000, max_fraction=0.01):
+    """True if more than max_fraction of samples sit at full scale — the
+    recording was too loud and is audibly distorted."""
+    import array
+    with wave.open(path, 'rb') as wf:
+        samples = array.array('h', wf.readframes(wf.getnframes()))
+    if not samples:
+        return False
+    hot = sum(1 for s in samples if abs(s) >= threshold)
+    return hot / len(samples) > max_fraction
+
+
 def _trim_silence(path, pad_ms=120, chunk_ms=20, silence_floor=150, voiced_ratio=0.12):
     """
     Trim leading/trailing silence from a mono PCM WAV file in place, so the
@@ -568,6 +580,7 @@ class VoiceManagerDialog(QDialog):
                   os.path.getsize(temp) > 4096)   # at least a few KB
 
             no_voice = False
+            clipped = False
             if ok:
                 # Trim to just the spoken part — cuts the dead air from the
                 # fixed recording window down to the actual word, and catches
@@ -587,6 +600,12 @@ class VoiceManagerDialog(QDialog):
                         os.unlink(dest)
                     os.rename(temp, dest)
                     logger.info(f"[VoiceManager] ✔ Saved (trimmed): {dest}")
+                    try:
+                        clipped = _is_clipped(dest)
+                    except Exception:
+                        clipped = False
+                    if clipped:
+                        logger.warning(f"[VoiceManager] ⚠ {os.path.basename(dest)} is clipped (too loud)")
                 except Exception as e:
                     logger.error(f"[VoiceManager] ✘ Rename failed: {e}")
                     ok = False
@@ -602,11 +621,11 @@ class VoiceManagerDialog(QDialog):
                         pass
 
             # Update UI back on the main thread via a queued timer
-            QTimer.singleShot(0, lambda: self._on_recording_saved(label, ok, missing_only, no_voice))
+            QTimer.singleShot(0, lambda: self._on_recording_saved(label, ok, missing_only, no_voice, clipped))
 
         threading.Thread(target=_finish, daemon=True).start()
 
-    def _on_recording_saved(self, label, success, missing_only, no_voice=False):
+    def _on_recording_saved(self, label, success, missing_only, no_voice=False, clipped=False):
         """Called on the main thread once the background save thread finishes."""
         self.progress_bar.setValue(100)
         self.progress_bar.setStyleSheet(
@@ -625,6 +644,14 @@ class VoiceManagerDialog(QDialog):
 
         self.update_list_item_status(label)
         self.update_preview_controls()
+
+        # Set last: update_preview_controls() overwrites the status label.
+        if success and clipped:
+            self.lbl_status.setText(
+                "⚠️ Saved, but too loud — it will sound distorted. "
+                "Move a little back from the mic and record again."
+            )
+            self.lbl_status.setStyleSheet("color:#FFD93D; font-weight:bold;")
 
         if missing_only and label:
             QTimer.singleShot(600, self._advance_to_next_missing)

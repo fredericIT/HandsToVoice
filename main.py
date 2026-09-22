@@ -14,6 +14,19 @@ from PyQt5.QtCore import QTimer, QThread, pyqtSignal
 # Add src directory to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
+try:
+    # Force torch's one-time native initialization to happen here, on the
+    # main thread, before anything spawns a thread. Loading torch for the
+    # first time inside SpeechListener's background thread — while
+    # TensorFlow (also loaded via a background thread; see
+    # _ComponentInitWorker below) is active in the same process — reliably
+    # deadlocked at 0% CPU with no error, both threads stuck importing.
+    # Front-loading it here, single-threaded, avoids that entirely.
+    import torch
+    torch.get_num_threads()   # touch it so the import isn't flagged as unused
+except Exception:
+    pass
+
 from src.gui.styles import get_stylesheet, load_bundled_fonts
 from src.capture import CameraCapture
 from src.detector import HandDetector
@@ -216,6 +229,8 @@ class HandsToVoiceApp:
     def cleanup(self):
         """Clean up all resources."""
         try:
+            if self.main_window:
+                self.main_window.stop_listening()
             if self.camera:
                 self.camera.release()
             if self.detector:

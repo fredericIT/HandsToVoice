@@ -4,7 +4,7 @@ PyQt5 main window that integrates all system components.
 Includes a sidebar with signing-state indicator.
 """
 
-from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QFrame, QLabel, QPushButton, QProgressBar,
                              QScrollArea, QSplitter, QGroupBox, QStatusBar)
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot
@@ -17,8 +17,10 @@ from .edit_sign_dialog import EditSignDialog
 from .delete_sign_dialog import DeleteSignDialog
 from .model_info_dialog import ModelInfoDialog
 from .learn_sign_dialog import LearnSignDialog
+from .sign_popup import SignPopup
 
 from src.logger import get_logger
+from src.speech_listener import SpeechListener
 from src.model_info import load_lstm_metadata, summarize
 
 logger = get_logger("gui.main_window")
@@ -87,11 +89,15 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 1400, 800)
         self.setMinimumSize(1100, 600)
 
+        self.speech_listener = None
+        self.sign_popup = SignPopup(self.vocabulary, self)
+
         self.setup_ui()
         self.setup_status_bar()
         self.setup_connections()
         self._apply_sign_state(STATE_IDLE)
         self.update_ui_state()
+        self._start_listening()
 
     # ── UI construction ──────────────────────────────────────────────────────
     def setup_ui(self):
@@ -442,6 +448,14 @@ class MainWindow(QMainWindow):
         self.clear_button.clicked.connect(self.clear_sentence)
         session_row.addWidget(self.clear_button)
 
+        self.listen_button = QPushButton("🎧 Listening: loading…")
+        self.listen_button.setObjectName("neutralButton")
+        self.listen_button.setToolTip(
+            "When a hearing person says a vocabulary word, its sign video pops up. "
+            "Click to turn microphone listening off or on.")
+        self.listen_button.clicked.connect(self.toggle_listening)
+        session_row.addWidget(self.listen_button)
+
         outer.addLayout(session_row)
 
         divider = QFrame()
@@ -703,6 +717,66 @@ class MainWindow(QMainWindow):
             self._enter_interpreting()
             return
 
+    # ── Listening: speech in -> sign video out ───────────────────────────────
+    def _start_listening(self):
+        if self.speech_listener is not None:
+            return
+        self.speech_listener = SpeechListener(self._vocab_words())
+        self.speech_listener.words_heard.connect(self._on_words_heard)
+        self.speech_listener.mic_silent.connect(self._on_mic_silent)
+        self.speech_listener.model_status.connect(self._on_listen_model_status)
+        self.speech_listener.start()
+
+    def stop_listening(self):
+        if self.speech_listener is not None:
+            self.speech_listener.stop()
+            self.speech_listener = None
+        self.listen_button.setText("🎧 Listening: Off")
+
+    def toggle_listening(self):
+        if self.speech_listener is None:
+            self.listen_button.setText("🎧 Listening: loading…")
+            self._start_listening()
+        else:
+            self.stop_listening()
+
+    def _vocab_words(self):
+        return {label: info.get("kinyarwanda", label)
+                for label, info in self.vocabulary.signs.items()}
+
+    def _reload_listener_vocab(self):
+        if self.speech_listener is not None:
+            self.speech_listener.update_vocab(self._vocab_words())
+
+    @pyqtSlot(str)
+    def _on_listen_model_status(self, status):
+        if status == "ready":
+            self.listen_button.setText("🎧 Listening: On")
+        elif status == "failed":
+            self.listen_button.setText("🎧 Listening: unavailable")
+            self.listen_button.setEnabled(False)
+            self.listen_button.setToolTip("The speech-recognition model could not be loaded.")
+
+    @pyqtSlot(bool)
+    def _on_mic_silent(self, silent):
+        if self.speech_listener is None:
+            return
+        self.listen_button.setText("🎧 Mic is muted?" if silent else "🎧 Listening: On")
+
+    def _update_listener_mute(self):
+        """Don't listen while the system is speaking a sign aloud — the mic
+        would hear the system's own voice and pop up that same sign again."""
+        if self.speech_listener is not None:
+            self.speech_listener.muted = self.tts.is_speaking()
+
+    @pyqtSlot(list)
+    def _on_words_heard(self, words):
+        if QApplication.activeModalWidget() is not None:
+            return          # a dialog is open (e.g. recording a voice) — not audience speech
+        labels = [label for label, _ in words]
+        logger.info(f"[Listen] showing signs for: {labels}")
+        self.sign_popup.show_words(labels)
+
     # ── Confirm-before-speak / Undo ──────────────────────────────────────────
     def _confirm_pending_sign(self):
         """Grace period elapsed with no Undo — speak the held sign(s) now."""
@@ -829,6 +903,7 @@ class MainWindow(QMainWindow):
         self._refresh_voice_banner()
         self.update_status_bar()
         self.update_ui_state()
+        self._reload_listener_vocab()
         logger.info("[MainWindow] State refreshed after sign deletion.")
 
     def open_voice_manager(self):
@@ -868,6 +943,7 @@ class MainWindow(QMainWindow):
         self.sentence_history = new_history
         self.update_sentence_display()
         self._refresh_voice_banner()
+        self._reload_listener_vocab()
 
         if self.current_sign:
             display = self.vocabulary.get_display_text(self.current_sign)
@@ -1001,6 +1077,7 @@ class MainWindow(QMainWindow):
 
     # ── Periodic UI refresh ──────────────────────────────────────────────────
     def update_ui_state(self):
+        self._update_listener_mute()
         if self.current_sign:
             display = self.vocabulary.get_display_text(self.current_sign)
             self.sign_label.setText(display)

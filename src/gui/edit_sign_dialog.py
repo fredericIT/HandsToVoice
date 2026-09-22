@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 
 from src.logger import get_logger
-from src.gui.voice_manager_dialog import _trim_silence
+from src.gui.voice_manager_dialog import _trim_silence, _is_clipped
 
 logger = get_logger("gui.edit_sign_dialog")
 
@@ -487,6 +487,7 @@ class EditSignDialog(QDialog):
 
             ok = temp and dest and os.path.exists(temp) and os.path.getsize(temp) > 4096
             no_voice = False
+            clipped = False
             if ok:
                 try:
                     if not _trim_silence(temp):
@@ -501,6 +502,10 @@ class EditSignDialog(QDialog):
                         os.unlink(dest)
                     os.rename(temp, dest)
                     logger.info(f"[EditSign] ✔ Saved (trimmed): {dest}")
+                    try:
+                        clipped = _is_clipped(dest)
+                    except Exception:
+                        clipped = False
                 except Exception as e:
                     logger.error(f"[EditSign] ✘ Rename failed: {e}")
                     ok = False
@@ -515,11 +520,11 @@ class EditSignDialog(QDialog):
                     except Exception:
                         pass
 
-            QTimer.singleShot(0, lambda: self._on_recording_saved(label, ok, no_voice))
+            QTimer.singleShot(0, lambda: self._on_recording_saved(label, ok, no_voice, clipped))
 
         threading.Thread(target=_finish, daemon=True).start()
 
-    def _on_recording_saved(self, label, success, no_voice):
+    def _on_recording_saved(self, label, success, no_voice, clipped=False):
         self.voice_progress.setValue(100)
         self.voice_progress.setStyleSheet(
             "QProgressBar { background:#0F1419; border:1px solid #2A3A4A; border-radius:4px; }"
@@ -538,6 +543,14 @@ class EditSignDialog(QDialog):
         if label == self.selected_label:
             self._refresh_list_item(label)
             self._refresh_voice_status()
+
+        # Set last: _refresh_voice_status() overwrites the status label.
+        if success and clipped:
+            self.lbl_voice_status.setText(
+                "⚠️ Saved, but too loud — it will sound distorted. "
+                "Move a little back from the mic and record again."
+            )
+            self.lbl_voice_status.setStyleSheet("color:#FFD93D; font-weight:bold;")
 
     def _on_elapsed_tick(self):
         elapsed = time.time() - self.elapsed_start

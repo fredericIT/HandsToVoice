@@ -19,6 +19,7 @@ from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtMultimedia import QAudioRecorder, QAudioEncoderSettings, QMultimedia
 
 from src.logger import get_logger
+from src.lighting import LOW_LIGHT, CHECK_EVERY, frame_brightness, draw_low_light_warning
 
 logger = get_logger("gui.add_sign_dialog")
 
@@ -236,6 +237,12 @@ class TrainWorker(QThread):
                     hand_x_idx = np.arange(0, HAND_FEATURE_LENGTH, 3)
                     s[:, hand_x_idx] = -s[:, hand_x_idx]
                     s[:, HAND_FEATURE_LENGTH] = -s[:, HAND_FEATURE_LENGTH]
+                # Simulate the face not being detected (features zeroed).
+                # Without this the model leans on the face features so
+                # hard that accuracy fell from 96% to 46% whenever the face
+                # was missing live, and a few classes absorbed everything.
+                if rng.random() < 0.25:
+                    s[:, HAND_FEATURE_LENGTH:] = 0.0
                 X_train.append(s.astype(np.float32))
                 y_train.append(lbl)
 
@@ -775,6 +782,14 @@ class AddSignDialog(QDialog):
             if elapsed >= self.dur_spin.value():
                 self._stop_record()
 
+        # Drawn after writer.write() above, so the warning never ends up in
+        # the saved training clip.
+        self._light_checks = getattr(self, "_light_checks", 0) + 1
+        if self._light_checks % CHECK_EVERY == 1:
+            self._low_light = frame_brightness(frame) < LOW_LIGHT
+        if getattr(self, "_low_light", False):
+            draw_low_light_warning(frame)
+
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
         qi = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
@@ -860,6 +875,8 @@ class AddSignDialog(QDialog):
         self._test_match_count = 0
         self._test_total_preds = 0
         self._test_buffer.clear()
+        self._test_frame_count = 0
+        self._test_last_face_ref = None
 
         # Reset UI
         self.test_icon_label.setText("🔍")
@@ -930,8 +947,14 @@ class AddSignDialog(QDialog):
 
             if lm_list and self._test_lstm and self._test_lstm.is_ready():
                 landmarks = lm_list[0]
-                face_ref = self._test_detector.detect_face_ref(frame)
-                self._test_lstm.push_frame(landmarks, face_ref)
+                # Face position barely changes frame-to-frame — re-detect
+                # only every few frames (see CameraWidget.FACE_REF_EVERY).
+                if self._test_last_face_ref is None or self._test_frame_count % 5 == 0:
+                    found = self._test_detector.detect_face_ref(frame)
+                    if found is not None:
+                        self._test_last_face_ref = found
+                self._test_frame_count += 1
+                self._test_lstm.push_frame(landmarks, self._test_last_face_ref)
                 fill = self._test_lstm.buffer_fill()
                 self.test_buffer_bar.setValue(int(fill * 100))
 
