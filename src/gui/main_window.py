@@ -775,7 +775,14 @@ class MainWindow(QMainWindow):
             return          # a dialog is open (e.g. recording a voice) — not audience speech
         labels = [label for label, _ in words]
         logger.info(f"[Listen] showing signs for: {labels}")
-        self.sign_popup.show_words(labels)
+        try:
+            self.sign_popup.show_words(labels)
+        except Exception:
+            # PyQt slots invoked from a queued cross-thread signal (this one
+            # fires from SpeechListener's thread) can swallow exceptions
+            # silently instead of printing them — logging explicitly here
+            # to actually see what's failing.
+            logger.exception("[Listen] show_words() raised — popup not shown")
 
     # ── Confirm-before-speak / Undo ──────────────────────────────────────────
     def _confirm_pending_sign(self):

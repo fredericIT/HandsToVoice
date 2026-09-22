@@ -28,8 +28,8 @@ ONLINE_RETRY_SECONDS = 60  # how often to re-check online recognition after it's
 class Segmenter:
     """Cuts a stream of 16-bit samples into utterances separated by pauses."""
 
-    def __init__(self, sr=SAMPLE_RATE, frame_ms=20, pause_ms=300,
-                 min_ms=200, max_ms=4000, start_frames=3, min_rms=350.0,
+    def __init__(self, sr=SAMPLE_RATE, frame_ms=20, pause_ms=220,
+                 min_ms=200, max_ms=2500, start_frames=3, min_rms=350.0,
                  noise_factor=2.5):
         self.frame_len = int(sr * frame_ms / 1000)
         self.pause_frames = pause_ms // frame_ms
@@ -105,7 +105,14 @@ class Segmenter:
             return None
 
         self._frames.append(frame)
-        self._quiet_run = 0 if rms > threshold * 0.7 else self._quiet_run + 1
+        # A single loud frame (breath, trailing consonant) only costs a few
+        # frames of progress rather than resetting the whole countdown to
+        # 0 — otherwise one stray blip near the end of a word could force
+        # waiting all the way out to max_ms before giving up on a pause.
+        if rms > threshold * 0.7:
+            self._quiet_run = max(0, self._quiet_run - 4)
+        else:
+            self._quiet_run += 1
         if self._quiet_run >= self.pause_frames or len(self._frames) >= self.max_frames:
             return self._finish()
         return None
