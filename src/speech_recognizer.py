@@ -40,6 +40,24 @@ ONLINE_TIMEOUT = 5   # seconds to wait for Google's endpoint before giving up
 # between the two with margin on both sides.
 MATCH_THRESHOLD = 0.6
 
+# A vocabulary word shorter than this many letters (e.g. "ni" - Kinyarwanda
+# for "is") is far too short and common to safely spot embedded inside a
+# natural sentence — ordinary grammar would trigger it on almost every
+# sentence. Such short words are only matched when spoken alone as the
+# whole utterance, never as a fragment picked out of a longer sentence.
+MIN_EMBED_CHARS = 4
+
+# Stricter threshold applied only when picking a vocabulary word out of a
+# longer sentence rather than matching a single spoken word. With one word
+# spoken alone, MATCH_THRESHOLD's calibration (against real, sometimes
+# noisy transcriptions of that exact word) applies directly. Inside a full
+# sentence, many unrelated words are being compared per utterance instead
+# of one, so the odds of some unrelated word coincidentally overlapping a
+# vocabulary word's letters (e.g. "amakuru" vs "marume", ratio 0.62) rise
+# with sentence length — this higher bar keeps that noise out without
+# touching the single-word calibration.
+EMBED_MATCH_THRESHOLD = 0.75
+
 
 def load_wav(path, target_sr=SAMPLE_RATE):
     """Read a 16-bit mono WAV as float32 in [-1, 1], resampled to target_sr."""
@@ -63,16 +81,40 @@ def _normalize(text):
 
 def fuzzy_match(text, vocab_words, threshold=MATCH_THRESHOLD):
     """Best (label, ratio) from vocab_words = {label: kinyarwanda_text}
-    whose text is close enough to `text`, or None if nothing is close enough."""
+    whose text is close enough to `text`, or None if nothing is close enough.
+
+    `text` may be a single isolated word (matched directly) or a full
+    natural sentence with a vocabulary word or phrase embedded in it (e.g.
+    "ndashaka kuvuga amazi") — every contiguous run of words up to the
+    longest vocabulary phrase is tried as its own candidate, so a match is
+    found regardless of what surrounds it in the sentence. Candidates
+    always respect word boundaries (never the raw, unsegmented sentence
+    compared as one long string) — a short word compared against a whole
+    long sentence can score a deceptively high ratio by chance character
+    overlap alone, with no relation to whether the word was actually said."""
     if not text.strip():
         return None
-    target = _normalize(text)
+    words = text.lower().split()
+    if not words:
+        return None
+    max_phrase_len = max((len(w.split()) for w in vocab_words.values()), default=1)
+
+    windows = []
+    for size in range(1, min(max_phrase_len, len(words)) + 1):
+        for start in range(len(words) - size + 1):
+            windows.append("".join(words[start:start + size]))
+
     best_label, best_ratio = None, 0.0
     for label, word in vocab_words.items():
-        ratio = difflib.SequenceMatcher(None, target, _normalize(word)).ratio()
-        if ratio > best_ratio:
-            best_label, best_ratio = label, ratio
-    if best_ratio >= threshold:
+        target_word = _normalize(word)
+        if len(target_word) < MIN_EMBED_CHARS and len(words) > 1:
+            continue   # too short/common a word to trust unless it's the whole utterance
+        for candidate in windows:
+            ratio = difflib.SequenceMatcher(None, candidate, target_word).ratio()
+            if ratio > best_ratio:
+                best_label, best_ratio = label, ratio
+    effective_threshold = threshold if len(words) == 1 else EMBED_MATCH_THRESHOLD
+    if best_ratio >= effective_threshold:
         return best_label, best_ratio
     return None
 
@@ -104,6 +146,11 @@ class SpeechRecognizer:
         try:
             import speech_recognition as sr_lib
             self._online_recognizer = sr_lib.Recognizer()
+            # Must be set here: recognize_google passes this straight to
+            # urlopen, and its default of None means "wait forever" —
+            # overriding socket.setdefaulttimeout. One stalled request to
+            # Google then froze the listener thread for good.
+            self._online_recognizer.operation_timeout = ONLINE_TIMEOUT
         except Exception as e:
             logger.error(f"[SpeechRecognizer] Online recognition unavailable: {e}")
             self._online_recognizer = None
@@ -142,11 +189,8 @@ class SpeechRecognizer:
         fallback; '' means Google understood nothing, which is a real answer."""
         if self._online_recognizer is None:
             return None
-        import socket
         import speech_recognition as sr_lib
         audio = _to_audio_data(signal)
-        old_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(ONLINE_TIMEOUT)
         try:
             text = self._online_recognizer.recognize_google(audio, language=ONLINE_LANGUAGE)
             self._online_fail_count = 0
@@ -165,8 +209,6 @@ class SpeechRecognizer:
                 logger.warning("[SpeechRecognizer] Online recognition disabled after repeated "
                                "failures — using offline only. Will retry periodically.")
             return None
-        finally:
-            socket.setdefaulttimeout(old_timeout)
 
     def retry_online(self):
         """Call periodically (e.g. every minute) to resume trying online

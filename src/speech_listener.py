@@ -29,8 +29,15 @@ class Segmenter:
     """Cuts a stream of 16-bit samples into utterances separated by pauses."""
 
     def __init__(self, sr=SAMPLE_RATE, frame_ms=20, pause_ms=220,
-                 min_ms=200, max_ms=2500, start_frames=3, min_rms=180.0,
+                 min_ms=200, max_ms=4500, start_frames=3, min_rms=180.0,
                  noise_factor=2.5):
+        # max_ms was 2500 while this only needed to capture a single
+        # vocabulary word; now that fuzzy_match (speech_recognizer.py) can
+        # find a vocab word embedded anywhere in a full sentence, the cap
+        # must be long enough to hold a natural sentence, not just one
+        # word, or speech gets cut mid-sentence before the word in it is
+        # even said. pause_ms is unchanged — a real pause still ends the
+        # utterance immediately, so single words are unaffected.
         # min_rms is a hard floor below which a frame is never treated as
         # speech, regardless of how quiet the room is — it exists so a
         # near-silent room doesn't drop the "loud" threshold to near-zero
