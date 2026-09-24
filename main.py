@@ -30,7 +30,7 @@ except Exception:
 from src.gui.styles import get_stylesheet, load_bundled_fonts
 from src.capture import CameraCapture
 from src.detector import HandDetector
-from src.classifier import SignClassifier, LSTMClassifier
+from src.classifier import LSTMClassifier
 from src.tts import VoiceOutput
 from src.vocabulary import Vocabulary
 from src.gui.main_window import MainWindow
@@ -53,7 +53,7 @@ SHOW_LOADING_SCREEN = False
 
 
 class _ComponentInitWorker(QThread):
-    """Loads the camera, detector, classifiers, and voice engine off the
+    """Loads the camera, detector, sign model, and voice engine off the
     GUI thread, so clicking "Get Started" shows a loading screen instantly
     instead of freezing the window for the several seconds this takes."""
 
@@ -68,13 +68,11 @@ class _ComponentInitWorker(QThread):
         try:
             camera = CameraCapture(camera_index=self.camera_index)
             detector = HandDetector()
-            classifier = SignClassifier()
-
             lstm_classifier = LSTMClassifier()
             if lstm_classifier.is_ready():
                 logger.info("[System] LSTM model detected — sequence mode available")
             else:
-                logger.info("[System] No LSTM model — using static classifier only")
+                logger.info("[System] No trained sign model yet — use Add Sign to train one")
 
             vocabulary = Vocabulary()
             tts = VoiceOutput(vocabulary=vocabulary)
@@ -82,7 +80,6 @@ class _ComponentInitWorker(QThread):
             self.ready.emit({
                 "camera": camera,
                 "detector": detector,
-                "classifier": classifier,
                 "lstm_classifier": lstm_classifier,
                 "vocabulary": vocabulary,
                 "tts": tts,
@@ -108,7 +105,6 @@ class HandsToVoiceApp:
         # Initialize core components
         self.camera = None
         self.detector = None
-        self.classifier = None
         self.lstm_classifier = None
         self.tts = None
         self.vocabulary = None
@@ -119,7 +115,6 @@ class HandsToVoiceApp:
             self.main_window = MainWindow(
                 camera=self.camera,
                 detector=self.detector,
-                classifier=self.classifier,
                 tts=self.tts,
                 vocabulary=self.vocabulary,
                 lstm_classifier=self.lstm_classifier,
@@ -200,7 +195,6 @@ class HandsToVoiceApp:
         every component — safe to build QWidgets here."""
         self.camera = components["camera"]
         self.detector = components["detector"]
-        self.classifier = components["classifier"]
         self.lstm_classifier = components["lstm_classifier"]
         self.vocabulary = components["vocabulary"]
         self.tts = components["tts"]

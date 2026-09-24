@@ -21,5 +21,13 @@ pygame>=2.5.0
 # GUI
 PyQt5>=5.15.0
 
+# Voice listening (hearing person's speech -> sign video)
+SpeechRecognition>=3.17.0
+transformers>=5.17.0
+# CPU-only PyTorch is enough and ~10x smaller than the default CUDA build:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.14.0
+
 # Utilities
 Pillow>=10.0.0
+matplotlib>=3.10.0   # evaluate_model.py confusion-matrix image

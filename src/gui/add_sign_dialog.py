@@ -18,6 +18,8 @@ from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QUrl
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtMultimedia import QAudioRecorder, QAudioEncoderSettings, QMultimedia
 
+from src import training
+from src.training import SEQUENCE_LENGTH, FEATURE_LENGTH
 from src.logger import get_logger
 from src.lighting import LOW_LIGHT, CHECK_EVERY, frame_brightness, draw_low_light_warning
 
@@ -27,9 +29,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 VIDEO_DIR = "data/videos"
 SEQUENCE_DIR = "data/sequences"
-SEQUENCE_LENGTH = 30
-FEATURE_LENGTH = 65   # 63 hand + 2 face-relative (see src/normalize.py)
-HAND_FEATURE_LENGTH = 63
 TEST_CONFIDENCE_THRESHOLD = 0.5
 
 
@@ -163,7 +162,6 @@ class TrainWorker(QThread):
         import tensorflow as tf
         tf.get_logger().setLevel("ERROR")
         from sklearn.preprocessing import LabelEncoder
-        from tensorflow import keras
 
         labels_csv = os.path.join(SEQUENCE_DIR, "labels.csv")
         mapping = {}
@@ -194,88 +192,14 @@ class TrainWorker(QThread):
         nc = len(le.classes_)
         self.log.emit(f"  {nc} classes: {list(le.classes_)}")
 
-        # Split ORIGINAL (unaugmented) sequences into train/val first, per
-        # class. Augmenting before splitting — the previous behavior — put
-        # near-duplicate copies of the same clip (tiny noise/scale/shift) on
-        # both sides of the split, so validation accuracy just measured
-        # memorization of near-twins and reported ~100% even when the model
-        # didn't generalize to a real new attempt at the sign on webcam.
         rng = np.random.default_rng(42)
-        train_idx, val_idx = [], []
-        for cls in np.unique(y_enc):
-            cls_idx = np.where(y_enc == cls)[0]
-            rng.shuffle(cls_idx)
-            n_val_cls = max(1, int(len(cls_idx) * 0.15)) if len(cls_idx) > 1 else 0
-            val_idx.extend(cls_idx[:n_val_cls])
-            train_idx.extend(cls_idx[n_val_cls:])
-        train_idx = np.array(train_idx)
-        val_idx = np.array(val_idx)
-
-        X_train_raw, y_train_raw = X[train_idx], y_enc[train_idx]
+        train_idx, val_idx = training.split_per_class(y_enc, rng)
         X_val, y_val = X[val_idx], y_enc[val_idx]   # left unaugmented — real generalization check
-
-        # Augment only the training portion
-        n_aug = max(20, 100 // max(1, len(X_train_raw)))
-        X_train, y_train = [], []
-        for seq, lbl in zip(X_train_raw, y_train_raw):
-            X_train.append(seq)
-            y_train.append(lbl)
-            for _ in range(n_aug - 1):
-                s = seq.copy()
-                s += rng.normal(0, 0.01, s.shape).astype(np.float32)
-                s *= rng.uniform(0.9, 1.1)
-                shift = rng.integers(-3, 4)
-                s = np.roll(s, shift, axis=0)
-                if rng.random() > 0.5:
-                    # Left-right mirror. These sequences are already
-                    # wrist-centered/scaled by this point (normalize_landmarks
-                    # ran during extraction), so a mirror is negation, not
-                    # "1.0 - x" — that formula only makes sense for raw
-                    # [0, 1] image coordinates. Also negate the face-relative
-                    # horizontal offset (rel_x); rel_y is untouched since a
-                    # left-right flip doesn't affect vertical position.
-                    hand_x_idx = np.arange(0, HAND_FEATURE_LENGTH, 3)
-                    s[:, hand_x_idx] = -s[:, hand_x_idx]
-                    s[:, HAND_FEATURE_LENGTH] = -s[:, HAND_FEATURE_LENGTH]
-                # Simulate the face not being detected (features zeroed).
-                # Without this the model leans on the face features so
-                # hard that accuracy fell from 96% to 46% whenever the face
-                # was missing live, and a few classes absorbed everything.
-                if rng.random() < 0.25:
-                    s[:, HAND_FEATURE_LENGTH:] = 0.0
-                X_train.append(s.astype(np.float32))
-                y_train.append(lbl)
-
-        X_train = np.array(X_train, dtype=np.float32)
-        y_train = np.array(y_train)
-        perm = rng.permutation(len(X_train))
-        X_train, y_train = X_train[perm], y_train[perm]
+        X_train, y_train = training.augment(X[train_idx], y_enc[train_idx], rng)
         self.log.emit(f"  Train: {len(X_train)} (augmented)  Val: {len(X_val)} (real, unaugmented)")
 
-        # Build model
-        from tensorflow.keras import Sequential
-        from tensorflow.keras.layers import Input, LSTM as LSTMLayer, Dense, Dropout
-        model = Sequential([
-            Input(shape=(SEQUENCE_LENGTH, FEATURE_LENGTH)),
-            LSTMLayer(64, return_sequences=True),
-            Dropout(0.3),
-            LSTMLayer(32),
-            Dropout(0.3),
-            Dense(64, activation="relu"),
-            Dropout(0.2),
-            Dense(nc, activation="softmax"),
-        ], name="ksl_lstm")
-        model.compile(optimizer="adam", loss="sparse_categorical_crossentropy",
-                      metrics=["accuracy"])
-
-        cb = [
-            keras.callbacks.EarlyStopping(patience=12, restore_best_weights=True,
-                                          monitor="val_accuracy"),
-            keras.callbacks.ReduceLROnPlateau(patience=6, factor=0.5,
-                                              monitor="val_loss"),
-        ]
-        history = model.fit(X_train, y_train, validation_data=(X_val, y_val),
-                            epochs=60, batch_size=16, callbacks=cb, verbose=0)
+        model = training.build_model(nc)
+        history = training.fit(model, X_train, y_train, X_val, y_val)
 
         best_acc = max(history.history.get("val_accuracy", [0]))
         self.log.emit(f"  Best val accuracy: {best_acc:.2%}")

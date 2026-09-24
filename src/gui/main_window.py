@@ -43,14 +43,13 @@ class MainWindow(QMainWindow):
     # cancel a wrong detection before it reaches the audience.
     CONFIRM_DELAY_MS = 1500
 
-    def __init__(self, camera, detector, classifier, tts, vocabulary,
+    def __init__(self, camera, detector, tts, vocabulary,
                  lstm_classifier=None, speech_listener=None):
         super().__init__()
 
         # System components
         self.camera = camera
         self.detector = detector
-        self.classifier = classifier
         self.tts = tts
         self.vocabulary = vocabulary
         self.lstm_classifier = lstm_classifier
@@ -65,11 +64,6 @@ class MainWindow(QMainWindow):
         self._sign_state = STATE_IDLE
         self._last_detected_sign = None   # suppress consecutive duplicates
 
-        # Speed optimisations
-        self._frame_skip = 0          # run classifier every N frames
-        self._CLASSIFY_EVERY = 3      # only classify 1 in 3 frames (~10 fps)
-        self._sign_buffer = []        # consecutive-frame consensus buffer
-        self._CONSENSUS_NEEDED = 3    # frames in a row to confirm a sign
         self._lstm_sign_buffer = []       # consecutive overlapping-window consensus for LSTM
         self._LSTM_CONSENSUS_NEEDED = 2   # windows in a row to confirm an LSTM sign
 
@@ -509,6 +503,16 @@ class MainWindow(QMainWindow):
     def setup_status_bar(self):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        self.speech_privacy_label = QLabel(
+            "🔒 While listening, speech is sent to Google to be recognized")
+        self.speech_privacy_label.setToolTip(
+            "Voice listening sends each spoken phrase to Google's speech service "
+            "over the internet. Without internet, it is recognized on this "
+            "computer instead and nothing leaves it. HandsToVoice itself never "
+            "saves the audio. "
+            "Turn listening off with the 🎧 button.")
+        self.speech_privacy_label.hide()
+        self.status_bar.addPermanentWidget(self.speech_privacy_label)
         self.update_status_bar()
 
     # ── Connections ──────────────────────────────────────────────────────────
@@ -612,40 +616,9 @@ class MainWindow(QMainWindow):
                 else:
                     self.lstm_classifier.slide_buffer()
             else:
-                # LSTM buffer is full but gave no result — slide and try static
+                # LSTM buffer is full but gave no result — slide and keep going
                 self._lstm_sign_buffer.clear()
                 self.lstm_classifier.slide_buffer()
-
-        # ── Step 3: Fall through to static classifier ────────────────────
-        # Only use static when LSTM gave no result AND LSTM buffer isn't
-        # actively filling.  When LSTM is filling, the static classifier may
-        # misidentify new signs (that only the LSTM knows) as old signs,
-        # poisoning _last_detected_sign and blocking the correct LSTM result.
-        use_static_fallback = (
-            not sign_label
-            and self.classifier.is_ready()
-            and (not self.use_lstm
-                 or self.lstm_classifier.buffer_fill() < 0.2)
-        )
-        if use_static_fallback:
-            self._frame_skip += 1
-            if self._frame_skip >= self._CLASSIFY_EVERY:
-                self._frame_skip = 0
-
-                static_label, static_conf = self.classifier.predict(landmarks)
-                if static_label and static_conf > 0:
-                    self._sign_buffer.append(static_label)
-                    self._sign_buffer = self._sign_buffer[-self._CONSENSUS_NEEDED:]
-
-                    if (len(self._sign_buffer) == self._CONSENSUS_NEEDED and
-                            len(set(self._sign_buffer)) == 1):
-                        sign_label = static_label
-                        confidence = static_conf
-                        source = "Static"
-                        self._sign_buffer.clear()
-                else:
-                    if self._sign_buffer:
-                        self._sign_buffer.pop(0)
 
         if sign_label:
             sign_label = str(sign_label)   # cast np.str_ → plain str at source
@@ -653,8 +626,7 @@ class MainWindow(QMainWindow):
             # Only speak if this is a DIFFERENT sign from the last one
             if sign_label == self._last_detected_sign:
                 # Same sign — reset buffer and wait; do not repeat audio
-                self.lstm_classifier.clear_buffer() if self.use_lstm else None
-                self._sign_buffer.clear()
+                self.lstm_classifier.clear_buffer()
                 return
 
             logger.info(f"[Detection] {source} → '{sign_label}' ({confidence*100:.0f}%)")
@@ -701,7 +673,6 @@ class MainWindow(QMainWindow):
                 # ── Full reset so next batch collects only NEW signs ──
                 self._pending_batch.clear()
                 self._last_detected_sign = None   # any sign is fresh for next batch
-                self._sign_buffer.clear()         # flush static consensus buffer
                 if self.use_lstm:
                     self.lstm_classifier.clear_buffer()  # flush LSTM frame buffer
                 logger.info("[Batch] Buffers flushed — ready to collect next batch")
@@ -747,6 +718,7 @@ class MainWindow(QMainWindow):
             self.speech_listener.stop()
             self.speech_listener = None
         self.listen_button.setText("🎧 Listening: Off")
+        self.speech_privacy_label.hide()
 
     def toggle_listening(self):
         if self.speech_listener is None:
@@ -767,6 +739,7 @@ class MainWindow(QMainWindow):
     def _on_listen_model_status(self, status):
         if status == "ready":
             self.listen_button.setText("🎧 Listening: On")
+            self.speech_privacy_label.show()
         elif status == "failed":
             self.listen_button.setText("🎧 Listening: unavailable")
             self.listen_button.setEnabled(False)
@@ -1000,9 +973,9 @@ class MainWindow(QMainWindow):
         a generic "LSTM (Video)" badge that overstates what's actually known.
         """
         if not self.use_lstm:
-            self.model_mode_label.setText("📸 Static (Frame)")
+            self.model_mode_label.setText("⚠️ No model trained")
             self.model_mode_label.setStyleSheet(
-                "font-size:13px; font-weight:700; color:#00D4AA;"
+                "font-size:13px; font-weight:700; color:#FF8A65;"
                 "background:#1A2332; padding:8px; border-radius:8px;")
             return
 
@@ -1030,8 +1003,7 @@ class MainWindow(QMainWindow):
         self.current_sign = None
         self.current_confidence = 0.0
         self._last_detected_sign = None
-        self._sign_buffer.clear()
-        self._frame_skip = 0
+        self._lstm_sign_buffer.clear()
         self._pending_batch.clear()
         self._confirm_timer.stop()
         self._pending_speak_labels = None
@@ -1052,7 +1024,7 @@ class MainWindow(QMainWindow):
             self.start_recognition()
 
     def start_recognition(self):
-        if not self.classifier.is_ready() and not self.use_lstm:
+        if not self.use_lstm:
             self.show_model_warning()
             return
         self.is_recording = True
@@ -1094,7 +1066,7 @@ class MainWindow(QMainWindow):
         msg.setIcon(QMessageBox.Warning)
         msg.setWindowTitle("No Model Loaded")
         msg.setText("No trained model found. Please train a model first.")
-        msg.setInformativeText("Run 'python train_model.py' to train a model.")
+        msg.setInformativeText("Use ➕ Add Sign to record signs and train the model.")
         msg.exec_()
 
     # ── Periodic UI refresh ──────────────────────────────────────────────────
@@ -1133,8 +1105,6 @@ class MainWindow(QMainWindow):
             status = f"⏸️ Stopped | {signs_text}"
         if self.use_lstm:
             status += " | 🧠 LSTM Model"
-        elif self.classifier.is_ready():
-            status += " | ✅ Static Model"
         else:
             status += " | ⚠️ No Model"
         self.status_bar.showMessage(status)

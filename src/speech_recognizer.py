@@ -141,8 +141,7 @@ class SpeechRecognizer:
         self._online_available = True    # set False after a failure, retried occasionally
         self._online_fail_count = 0
 
-    def load(self):
-        """Load the offline fallback model. Online needs no loading."""
+    def setup_online(self):
         try:
             import speech_recognition as sr_lib
             self._online_recognizer = sr_lib.Recognizer()
@@ -155,6 +154,9 @@ class SpeechRecognizer:
             logger.error(f"[SpeechRecognizer] Online recognition unavailable: {e}")
             self._online_recognizer = None
 
+    def load(self):
+        """Set up online recognition and load the offline fallback model."""
+        self.setup_online()
         if self.ready:
             return
         try:

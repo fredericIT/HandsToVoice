@@ -1,258 +1,171 @@
 # HandsToVoice
 
-A Real-Time Kinyarwanda Sign Language Recognition and Voice Conversion System
+A real-time Kinyarwanda Sign Language recognition and voice conversion system.
 
-**University of Rwanda - College of Science and Technology**  
+**University of Rwanda — College of Science and Technology**
 **Department of Information and Communication Technology**
 
 ## Overview
 
-HandsToVoice is an assistive technology system that bridges the communication gap between people with speech disabilities and the general public. The system uses a standard PC webcam to detect and recognize Kinyarwanda Sign Language (KSL) gestures in real time, then converts those signs into spoken Kinyarwanda words through the computer's speaker.
+HandsToVoice helps a signer and a hearing person talk to each other, both ways, using an ordinary laptop:
+
+- **Sign → voice:** the signer signs in front of the webcam. The system recognizes each sign and speaks the Kinyarwanda word aloud.
+- **Voice → sign:** a hearing person speaks Kinyarwanda. When the speech contains a vocabulary word, the system shows the video of that sign to the signer.
+
+The system recognizes signs one at a time from a vocabulary of 36 signs (see [Vocabulary](#vocabulary)).
 
 ## Features
 
-- 🎥 **Real-time hand gesture recognition** using MediaPipe and OpenCV
-- 🧠 **Machine learning classification** with TensorFlow/Keras neural networks
-- 🔊 **Kinyarwanda text-to-speech** conversion (online and offline options)
-- 🖥️ **Modern PyQt5 GUI** with dark theme interface
-- 📊 **Data collection tools** for training custom models
-- 🎯 **10 basic KSL signs** included (expandable vocabulary)
+- **Sign recognition.** MediaPipe tracks 21 hand points and the face in each webcam frame. An LSTM network classifies each 30-frame sequence. Features are made independent of hand position and camera distance, and include the hand's position relative to the face.
+- **Batch speaking with undo.** Recognized signs are collected in groups of 3 and spoken after a short delay. During that delay, "Undo Last Sign" can cancel a wrong detection before anyone hears it.
+- **Recorded Kinyarwanda voices.** Each sign plays a real recorded voice. If a sign has no recording, the computer's built-in text-to-speech is used instead.
+- **Voice listening.** The system picks out vocabulary words from natural spoken sentences and shows each sign's video in a pop-up. Recognition uses Google's speech service when online and Meta's MMS model, running on the laptop, when offline.
+- **Sign management in the app.** Add a sign (define, record, train, test), edit or delete signs, manage voice recordings, and practise with "Learn a Sign".
+- **Low-light warning** when the room is too dark for reliable hand tracking.
 
-## System Requirements
+## Requirements
 
-- Python 3.8+
-- PC webcam (standard USB or built-in)
-- Speakers or headphones
-- Internet connection (for online TTS, optional)
+- Linux; developed and tested on Ubuntu 24.04. The microphone is read through `arecord` (`sudo apt install alsa-utils`).
+- Python 3.12.
+- A webcam, a microphone, and speakers.
+- About 4 GB of free disk space for the offline speech model. It downloads automatically the first time listening starts.
+- Internet is optional. Without it, listening uses the offline model only.
 
 ## Installation
 
-1. **Clone or download the project:**
-   ```bash
-   cd HandsToVoice
-   ```
-
-2. **Create virtual environment:**
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-## Quick Start
-
-### Option 1: Use Sample Data (Demo)
-
-1. **Train a model with sample data:**
-   ```bash
-   python train_model.py --sample-data --epochs 20
-   ```
-
-2. **Run the main application:**
-   ```bash
-   python main.py
-   ```
-
-### Option 2: Collect Your Own Data
-
-1. **Collect training data:**
-   ```bash
-   python collect_data.py
-   ```
-   - Follow the GUI instructions
-   - Collect samples for each sign
-   - Save data files
-
-2. **Combine and train:**
-   ```bash
-   # First, merge your collected data files
-   python train_model.py --data path/to/your/data.csv
-   ```
-
-3. **Run the application:**
-   ```bash
-   python main.py
-   ```
-
-## Usage Guide
-
-### Main Application
-
-1. **Start Recognition:** Click "▶️ Start Recognition" to begin
-2. **Perform Signs:** Make KSL gestures in front of the camera
-3. **View Results:** See recognized signs and confidence levels
-4. **Build Sentences:** Signs automatically form sentences
-5. **Voice Output:** Click "🔊 Speak" to hear the sentence
-
-### Data Collection
-
-1. **Select Sign:** Choose which KSL sign to collect
-2. **Set Target:** Choose number of samples (30-50 recommended)
-3. **Start Collection:** Click "▶️ Start Collection"
-4. **Perform Sign:** Make the gesture consistently
-5. **Save Data:** Click "💾 Save Data" when complete
-
-### Model Training
-
 ```bash
-# Train with existing data
-python train_model.py --data data/processed/your_data.csv
-
-# Train with sample data
-python train_model.py --sample-data
-
-# Use different model types
-python train_model.py --model-type random_forest
-python train_model.py --model-type svm
+cd HandsToVoice
+python3 -m venv venv
+venv/bin/python3 -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+venv/bin/python3 -m pip install -r requirements.txt
 ```
 
-## Project Structure
+Installing the CPU build of PyTorch first avoids downloading the much larger GPU build.
+
+## Running
+
+```bash
+./run.sh                  # or: ./run.sh --camera 1
+./install_launcher.sh     # optional: adds HandsToVoice to the applications menu
+```
+
+In the app:
+
+1. Click **▶️ Start Recognition** and sign in front of the camera.
+2. After 3 signs, the sentence is spoken automatically. Use **Undo Last Sign** to cancel a wrong one, or **🔊 Speak** to speak now.
+3. **🎧 Listening** is on by default. When a hearing person speaks, the matching sign videos pop up. Click the button to turn listening off.
+
+## Adding a new sign
+
+Use **➕ Add Sign** in the app. The wizard records the sign (several takes; more takes and small variations give better accuracy), extracts the hand landmarks, retrains the model and lets you test it straight away. Add the sign's Kinyarwanda voice recording in the same wizard or later in **Manage Voices**.
+
+## Evaluation
+
+```bash
+venv/bin/python3 evaluate_model.py
+```
+
+This runs 5-fold cross-validation with the app's own training pipeline (`src/training.py`), so every recording is predicted by a model that never saw it. It writes:
+
+- `reports/evaluation_report.md` — overall and per-sign accuracy, the most confused sign pairs, accuracy when the face is not detected, and prediction latency
+- `reports/confusion_matrix.png`
+- `reports/evaluation_results.json`
+
+The deployed model in `models/` is not changed.
+
+## Tests
+
+```bash
+venv/bin/python3 -m unittest discover -s tests -t .
+```
+
+These cover landmark normalization, the training data split and augmentation, how speech is cut into utterances, how spoken words are matched to signs, and the online speech time-out and fallback. They need no camera, microphone or internet.
+
+## Privacy
+
+- While listening is on, each spoken phrase is sent to Google's speech service when the computer is online. The app shows a notice in the status bar while this happens. Offline, speech is recognized on the laptop and nothing leaves it.
+- HandsToVoice never saves microphone audio or camera video during normal use. The only files it saves are the sign videos and voices you record on purpose in Add Sign, Edit Sign and Manage Voices.
+
+## Limitations
+
+- The recordings in this dataset come from one signer. Accuracy for a different person has not been measured yet; that needs recordings from additional signers kept out of training.
+- The system recognizes isolated signs, not continuous signed sentences. Sign language has its own grammar, which is not translated.
+- The vocabulary is 36 signs.
+
+## Project structure
 
 ```
 HandsToVoice/
-├── main.py                 # Main application entry point
-├── train_model.py          # Model training script
-├── collect_data.py         # Data collection GUI
-├── requirements.txt        # Python dependencies
-├── README.md              # This file
-├── src/                   # Source modules
-│   ├── capture.py         # Camera capture
-│   ├── detector.py        # Hand landmark detection
-│   ├── classifier.py      # Sign classification
-│   ├── tts.py            # Text-to-speech
-│   ├── vocabulary.py      # Sign vocabulary
-│   └── gui/              # GUI components
-│       ├── main_window.py
-│       ├── camera_widget.py
-│       └── styles.py
-├── data/                  # Data files
-│   ├── labels.json       # Vocabulary definitions
-│   ├── raw/              # Collected raw data
-│   └── processed/        # Processed training data
-├── models/               # Trained models
-└── assets/               # Additional resources
+├── main.py                  # Application entry point
+├── run.sh                   # Launcher
+├── install_launcher.sh      # Adds an applications-menu entry
+├── evaluate_model.py        # Cross-validated evaluation report
+├── requirements.txt
+├── src/
+│   ├── capture.py           # Webcam capture
+│   ├── detector.py          # MediaPipe hand and face detection
+│   ├── normalize.py         # Landmark normalization (65 features per frame)
+│   ├── classifier.py        # LSTM sign classifier (inference)
+│   ├── training.py          # Training pipeline shared by the app and evaluation
+│   ├── tts.py               # Voice output (recordings + text-to-speech fallback)
+│   ├── speech_listener.py   # Microphone listening and speech segmentation
+│   ├── speech_recognizer.py # Speech-to-text (online/offline) and word matching
+│   ├── lighting.py          # Low-light detection
+│   ├── vocabulary.py        # Sign vocabulary (data/labels.json)
+│   └── gui/                 # PyQt5 windows and dialogs
+├── tests/                   # Automated tests
+├── data/
+│   ├── labels.json          # Vocabulary definitions
+│   ├── videos/              # Recorded sign videos (one folder per sign)
+│   ├── sequences/           # Extracted landmark sequences used for training
+│   └── audio/               # Recorded Kinyarwanda voices
+├── models/                  # Trained model, labels and metadata
+└── reports/                 # Output of evaluate_model.py
 ```
 
-## Supported KSL Signs
+Older scripts in the project root (`train_model.py`, `train_simple.py`, `collect_data.py`, `add_amaso_and_retrain.py`, `add_letter_c_and_retrain.py`) belong to an earlier frame-by-frame approach and are not used by the app.
 
-The system includes 10 basic KSL signs:
+## Vocabulary
 
-| Sign | Kinyarwanda | English | Category |
-|------|------------|---------|----------|
-| muraho | Muraho | Hello | Greetings |
-| amakuru | Amakuru | How are you? | Greetings |
-| yego | Yego | Yes | Common |
-| oya | Oya | No | Common |
-| murakoze | Murakoze | Thank you | Greetings |
-| mbabarira | Mbabarira | Sorry/Excuse me | Common |
-| ndagukunda | Ndagukunda | I love you | Common |
-| amazi | Amazi | Water | Emergency |
-| ubufasha | Ubufasha | Help | Emergency |
-| muganga | Muganga | Doctor | Emergency |
-
-## Command Line Options
-
-### Main Application
-```bash
-python main.py --camera 0 --offline-tts
-```
-
-### Data Collection
-```bash
-python collect_data.py --camera 0 --output data/raw
-```
-
-### Model Training
-```bash
-python train_model.py --data data.csv --model-type neural_network --epochs 50
-```
-
-## Model Performance
-
-- **Target Accuracy:** 85%+ on test dataset
-- **Processing Speed:** 15+ FPS on standard laptop
-- **Vocabulary Size:** 10 signs (expandable)
-- **Feature Length:** 63 hand landmarks (21 points × 3 coordinates)
-
-## Troubleshooting
-
-### Camera Issues
-- Check camera connection and permissions
-- Try different camera index: `python main.py --camera 1`
-- Ensure no other app is using the camera
-
-### Model Not Loading
-- Train a model first: `python train_model.py --sample-data`
-- Check model files in `models/` directory
-
-### TTS Issues
-- **Online TTS:** Requires internet connection
-- **Offline TTS:** Use `--offline-tts` flag
-- Check system audio output
-
-### GUI Display Issues
-- Install Qt platform plugins: `sudo apt install python3-pyqt5`
-- Use display server: `export QT_QPA_PLATFORM=xcb`
-
-## Development
-
-### Adding New Signs
-
-1. **Update vocabulary** in `data/labels.json`
-2. **Collect training data** using `collect_data.py`
-3. **Retrain model** using `train_model.py`
-4. **Test with main application**
-
-### Model Architecture
-
-The neural network uses:
-- Input: 63 hand landmark features
-- Hidden layers: 128 → 64 → 32 neurons
-- Dropout: 30% regularization
-- Output: Softmax classification
-- Optimizer: Adam
-- Loss: Sparse categorical crossentropy
-
-### Data Pipeline
-
-1. **Capture:** Webcam frames at 30 FPS
-2. **Detection:** MediaPipe hand landmark extraction
-3. **Normalization:** Position-invariant feature vectors
-4. **Classification:** Trained neural network
-5. **Mapping:** Sign label to Kinyarwanda text
-6. **Speech:** Text-to-speech conversion
-
-## Contributing
-
-This is an academic project for the University of Rwanda. Contributions welcome:
-
-- **More KSL signs:** Expand the vocabulary
-- **Performance optimization:** Improve speed and accuracy
-- **Mobile version:** Android/iOS adaptation
-- **Offline models:** Quantized models for edge devices
-
-## License
-
-This project is developed for educational and research purposes at the University of Rwanda.
+| Kinyarwanda | English |
+|---|---|
+| muraho | hello |
+| umeze gute ?? | how are you? |
+| ameze | she / he is |
+| neza | well |
+| yego | yes |
+| oya | no |
+| nyabuneka | please |
+| mbabarira | sorry |
+| ndagukunda | I love you |
+| itonde | be careful |
+| tangira | start |
+| witeguye | witeguye |
+| birasobanutse | birasobanutse |
+| gusangiza | to share |
+| tugiye | we are going |
+| atandukanye | different |
+| benshi | benshi |
+| mwiza | mwiza |
+| ni | is |
+| ngewe | my |
+| wowe | you |
+| amazina yange | my name |
+| mama | mother |
+| papa | father |
+| marume | uncle |
+| masenge | aunt |
+| abana | children |
+| umunsi | day |
+| uyu munsi | today |
+| kuwa mbere | Monday |
+| kuwa kabiri | Tuesday |
+| kuwa gatatu | Wednesday |
+| kuwa kane | Thursday |
+| kuwa gatanu | Friday |
+| kuwa gatandatu | Saturday |
+| kucyumweru | Sunday |
 
 ## Acknowledgments
 
-- **MediaPipe** by Google for hand tracking
-- **TensorFlow** for machine learning
-- **OpenCV** for computer vision
-- **PyQt5** for GUI framework
-- **University of Rwanda** for project support
-
-## Contact
-
-**Project:** HandsToVoice  
-**Institution:** University of Rwanda - College of Science and Technology  
-**Department:** Information and Communication Technology  
-
----
-
-*Empowering communication through assistive technology*
+MediaPipe (Google) for hand and face tracking; TensorFlow for the sign model; Meta's MMS model and Hugging Face Transformers for offline speech recognition; OpenCV; PyQt5; and the University of Rwanda.
